@@ -9,3 +9,4 @@ navbar:
     href: RNASeq_gbpl3-5.html
 output:
   html_document:
+   theme: cosmo
