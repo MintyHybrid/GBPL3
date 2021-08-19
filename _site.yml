@@ -1,0 +1,11 @@
+name: "GBPL3collection"
+output_dir: "docs"
+navbar:
+  title: "GBPL3collection"
+  left:
+  - text: "Home"
+    href: index.html
+  - text: "RNASeq_gbpl3-5"
+    href: RNASeq_gbpl3-5.html
+output:
+  html_document:
