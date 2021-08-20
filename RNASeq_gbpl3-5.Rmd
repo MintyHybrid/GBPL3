@@ -6,22 +6,1279 @@ title: "RNASeq_gbpl3-5"
 knitr::opts_chunk$set(echo = TRUE)
 ```
 
-## R Markdown
+# Analysis of differential expression between Arabidopsis gbpl3-5 and WT using DESeq2 with featureCounts Huang et al 2021 data
 
-This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
 
-When you click the **Knit** button a document will be generated that includes both content as well as the output of any embedded R code chunks within the document. You can embed an R code chunk like this:
+#### Libraries
 
-```{r cars}
-summary(cars)
+First of all, I load several libraries. All of them were used in the tutorials referred to above.
+
+```{r libraries, results = 'hide'}
+
+library(DESeq2)
+library(tidyverse)
+library(vsn)
+library(pheatmap)
+library(RColorBrewer)
+library(PoiClaClu)
+library(glmpca)
+library(ggbeeswarm)
+library(apeglm)
+library(genefilter)
+library(IHW)
+library(gdata)
+library(magrittr)
+library(RUVSeq)
+library(ggplot2)
+library(ggrepel)
+library(data.table)
+# library(ComplexHeatmap)
+library(eulerr)
+library(UpSetR)
+
 ```
 
-## Including Plots
+#### Data import
 
-You can also embed plots, for example:
+import sample info, have a quick look and move on to import countdata for all samples. In both cases, we have to modify some things and most importantly, filter like hell until we only have left what is actually used. 
 
-```{r pressure, echo=FALSE}
-plot(pressure)
+
+DESeq2 basically just requires 2 things: 
+* sampledata: a table containing info about the samples/replicates and the properties of the samples, particularly those which are to be compared against each other. I create this one from scratch
+* countdata: this I found on the SRA 
+
+
+
+```{r countdataGEO}
+
+# import countdata from GEO project
+
+countdata <- fread("https://www.ncbi.nlm.nih.gov/geo/download/?acc=GSE134651&format=file&file=GSE134651_RNAseq_counts_file.csv.gz")
+
+countdata
+
 ```
 
-Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.
+Now I create the sampletable from the IDs which correspond to all except the first column names of the countdata. I just tweak the colnames a little (exchanging dashes for dots)
+
+```{r import}
+
+colnames(countdata) <- gsub("\\-", "\\.", colnames(countdata))
+sampledata <- tibble(ID = colnames(countdata), sample = gsub("\\_.*", "", colnames(countdata)))
+sampledata <- sampledata %>% filter(ID != "GeneID")
+sampledata
+
+# correcting sample name for gbpl1-1_rep1
+sampledata$sample <- gsub("gbpl.1", "gbpl1.1", sampledata$sample)
+sampledata
+```
+
+
+### Three ingredients to make a dds : preparing the three components and building the DESeq(2)-Dataset
+
+
+The DeseqDataSet (or a summarizedExperiment, from which it is derived), has three components: 
+
+* coldata - corresponds to the sampledata. It contains info about the samples or replicates (i.e. for each column - or columnheader - of the countdata object).
+* rowdata - holds info about the features, i.e. genes. It basically corresponds to "GeneID", "Chr", "Start", "End", "Strand" and "Length", and this time, I'll use the TxDb package, as for Arabidopsis there is one, yay! 
+* countmatrix - The actual feature counts; has to be a matrix and the counts have to be raw counts (i.e. not normalized or modified otherwise).
+
+
+All of these components can be build from the sample- and countdata objects. It's basically like baking cake and we now have to weigh and measure the ingredients before stirring all of them together. 
+
+
+
+
+#### Rowdata / rowRanges
+
+
+##### TxDb
+
+Gene info should be accessible from the TxDb package. Let's see what the Arabidopsis TxDb Package contains...
+
+```{r installtxdbAt1}
+
+### Leave commented if it's already installed!
+
+# if (!requireNamespace("BiocManager", quietly = TRUE))
+#     install.packages("BiocManager")
+# 
+# BiocManager::install("TxDb.Athaliana.BioMart.plantsmart28")
+
+```
+
+
+```{r txdbAtlib1}
+
+library(TxDb.Athaliana.BioMart.plantsmart28)
+
+```
+
+
+```{r txdbAtlib2}
+
+ls("package:TxDb.Athaliana.BioMart.plantsmart28") 
+
+columns(TxDb.Athaliana.BioMart.plantsmart28)
+
+
+keytypes(TxDb.Athaliana.BioMart.plantsmart28)
+
+head(keys(TxDb.Athaliana.BioMart.plantsmart28))
+head(keys(TxDb.Athaliana.BioMart.plantsmart28, keytype = "GENEID"))
+
+
+### make life a little easier
+
+txdb <- TxDb.Athaliana.BioMart.plantsmart28
+txdb
+
+class(txdb)
+
+
+```
+
+```{r exonsbygene}
+
+ebg <- exonsBy(txdb, by = "gene") 
+ebg <- GRangesList(ebg)
+
+ebg
+
+head(names(ebg))
+```
+
+
+#### Countmatrix
+
+I start with the countmatrix, which corresponds to a subset of the countdata object. To get the matrix, I select the gene_IDs (they will become the rownames of the matrix), and the columns containing featureCounts obtained from the replicates that I want to include in the analysis. 
+
+```{r}
+countdata.filtered <- countdata %>% dplyr::filter(GeneID %in% names(ebg))
+
+countdata.filtered
+
+ebg.filtered <- ebg[(names(ebg) %in% countdata.filtered$GeneID)]
+ebg.filtered
+
+```
+
+```{r countmatfiltered}
+
+countmat.filtered <- countdata.filtered %>% 
+  column_to_rownames(var = "GeneID") %>% 
+  as.matrix()
+
+
+head(countmat.filtered)
+```
+
+
+if all IDs would be present in the txdb object, then you'd simply do: 
+
+
+```{r countmat}
+
+countmat <- countdata %>% 
+  column_to_rownames(var = "GeneID") %>% 
+  as.matrix()
+
+
+head(countmat)
+```
+
+##### OrgDb
+
+the OrgDb package will be used to annotate the genes, later on! But the handling is sort of similar (or: it can be) to that of a txdb:
+
+```{r orgAtlib2}
+
+library(org.At.tair.db)
+
+```
+
+
+```{r orgAtlib3}
+
+ls("package:org.At.tair.db") 
+
+columns(org.At.tair.db)
+
+
+keytypes(org.At.tair.db)
+
+head(keys(org.At.tair.db))
+head(keys(org.At.tair.db, keytype = "GENENAME"))
+head(keys(org.At.tair.db, keytype = "SYMBOL"))
+head(keys(org.At.tair.db, keytype = "TAIR"))
+### make life a little easier
+
+orgdb <- org.At.tair.db
+orgdb
+
+class(orgdb)
+```
+
+#### Sampledata
+
+The sampledata file is already imported, but again, there are many more columns and in this case also more rows than we need (or more rows than there will be samples in the analysis). Moreover, the values are not stored as factors, but they have to be, in order to make DEseq work. 
+
+```{r sampledat0}
+
+head(sampledata)
+
+```
+
+So first, I throw out everything (from both rows as well as columns) that is not required to run the analysis. 
+
+```{r sampledat1}
+
+sampledat <- sampledata %>% 
+  
+  # filter for required rows (=replicates). I can use the colnames of the countmat to filter by
+  filter(ID  %in%  colnames(countmat.filtered))
+
+
+sampledat
+
+```
+
+Next, I have to make factors out of the values in all three columns (so far, they are characters). 
+And I sort the samples, so that the order of rows in the sampledat object matches the order of the corresponding columns in the countmat object.
+
+```{r sampledat2}
+
+# store order of columns in countmatrix for sorting
+colorder <- colnames(countmat.filtered)
+
+```
+
+
+```{r sampledat3}
+
+# convert sampledat columns to factors
+
+sampledat$ID <- as.factor(sampledat$ID) 
+sampledat$sample <- as.factor(sampledat$sample)
+
+
+# check order of factor levels 
+
+levels(sampledat$ID) # not in order
+levels(sampledat$sample) # not in order
+
+
+```
+
+
+```{r sampledat4}
+
+# make 20°C the reference level
+sampledat$ID %<>% relevel("wt_rep2")
+sampledat$ID %<>% relevel("wt_rep1")
+levels(sampledat$ID) # now it's fine. 
+
+# 2-step reordering of levels of Genotemp to get SEN20->SEN0->TOL20->TOL0
+sampledat$sample %<>% relevel("wt")
+levels(sampledat$sample) # now it's fine. 
+
+
+# adjust order of factorlevels for ID column to match with colorder in countmatrix
+sampledat$ID <- reorder.factor(sampledat$ID, new.order=colorder)
+sampledat <- sampledat %>% arrange(ID)
+
+```
+
+
+```{r sampledat5}
+
+### whoops... one last thing. I almost forgot to use the ID as rownames 
+sampledat <- column_to_rownames(sampledat, var = "ID")
+sampledat
+
+# The rownames, in fact, have to match the column names of countdat. Sanity check:
+all(rownames(sampledat) == colnames(countmat.filtered))
+
+```
+
+#### Designformula - the secret ingredient 
+
+
+When creating the DESeq dataset, we need to specify the "design".
+
+So far, the - in my opinion - best explanation (incl. examples) I came across is included [here](https://hbctraining.github.io/DGE_workshop/lessons/04_DGE_DESeq2_analysis.html).
+
+[This vignette](https://bioc.ism.ac.jp/packages/2.14/bioc/vignettes/DESeq2/inst/doc/beginner.pdf) gives a pretty basic explanation on how it is used and what it means with some examples that I modified in the text to match the analysis we run here: 
+
+_"[...] the DESeqDataSet has an associated 'design formula'. The design is specified at the beginning of the analysis, as this will inform many of theDESeq2 functions how to treat the samples in the analysis (one exception is the size factor estimation – adjustment for differing library sizes – which does not depend on the design formula). The design formula tells which variablesin the column metadata table (coldata aka sampledat) specify the experimental design and how these factors should be used in the analysis.The simplest design formula for differential expression would be ∼condition [or in our case, something like "genotemp"], where condition is a column in colData(dds) which specifies which of two (or more) groups the samples belong to."_ 
+
+
+We want to examine the 'general' temperature response. As trivial as it sounds, there are several ways to approach this (to be precise, there are at least three... and these three can again vary depending on how different parameters are specified, respectively.). I know this is a truely girly stereotype, but coming back to the cake metaphor: it's as if we have decided to bake a sponge cake and even though the ingredients basically the same, there are several ways to mix them together, which can slightly affect the outcome ... e.g. the texture or whatever. 
+
+Since we want to investigate how gene expression differs between the mutant and the wt, the design is pretty straight forward ("~sample")
+
+
+5. ...
+
+
+6. ...
+
+
+
+#### Creating the DESeqDataset(s)
+
+For now, we are now ready to create the DESeqDataSet, using the ingredients that we just prepared. 
+
+```{r contrasts}
+
+contrast_gbpl1 <- c("sample", "gbpl1.1",  "wt")
+contrast_gbpl3 <- c("sample", "gbpl3.5",  "wt")
+contrast_oex <- c("sample", "GBPL3.ox",  "wt")
+
+```
+
+
+```{r ddscreate}
+
+# approach 1: pairwise comparison of gbpb and wt (factor)
+
+dds <- DESeq2::DESeqDataSetFromMatrix(countmat.filtered, colData = sampledat, design = ~ sample)
+
+```
+
+```{r ddsaddrowRanges}
+
+rowRanges(dds) <- ebg.filtered
+
+```
+
+### Analysis of differential expression
+
+
+#### pre-filtering vs. no pre-filtering of zero-count genes 
+
+[The DESeq2 vignette](https://www.bioconductor.org/packages/devel/bioc/vignettes/DESeq2/inst/doc/DESeq2.html) says the following about pre-filtering:   
+
+*While it is not necessary to pre-filter low count genes before running the DESeq2 functions, there are two reasons which make pre-filtering useful: by removing rows in which there are no reads or nearly no reads, we reduce the memory size of the dds data object and we increase the speed of the transformation and testing functions within DESeq2. Here we perform a minimal pre-filtering to remove rows that have only 0 or 1 read. Note that more strict filtering to increase power is automatically applied via independent filtering on the mean of normalized counts within the results function, [...]*  
+
+
+```{r prefilter}
+
+keep <- rowSums(counts(dds)) > 1
+dds <- dds[keep,]
+nrow(dds)
+
+```
+
+
+#### One line to rule them all - the DESeq function 
+
+
+Next, we will run DESeq on each dds object, which runs several steps in the background that we ignore for now. Mostly, the default settings will do what I want.
+
+
+
+```{r DESeq}
+
+dds <- DESeq2::DESeq(dds)
+
+```
+
+#### Extracting and saving normalized counts
+
+
+After running `DESeq()`, we can now extract the results from the dds objects. And we can also extract the normalized counts and save them to a file. This is what I do first, because irrespective of how we extract the results and which parameters we adjust for the results (statistical tests, padj etc.) - the normalized counts should not change from here on. 
+
+
+```{r normcounts}
+
+# extract normalized counts
+
+normcounts <- counts(dds, normalized = TRUE)
+fpkm <- fpkm(dds)
+
+```
+
+
+```{r normcountsexport}
+
+# # write norm counts to file
+# 
+# # dir.create("./output")
+# write.table(normcounts, file = paste0("./output/", Sys.Date(), "_normcounts.txt", sep = ""), sep = "\t")
+# write.table(fpkm, file = paste0("./output/", Sys.Date(), "_fpkm.txt", sep = ""), sep = "\t")
+
+```
+
+
+#### Extracting and saving results 
+
+
+To get the results of the DESeq analysis for each dds, we only have to run `results()` on the dds object and save the results to a new object. If we wouldn't want anything else, we would be done at this point. 
+
+However, in our case, the following section will become another branching point:
+
+When there is more than one comparison defined by the design formula, by default, DESEq gives only the comparison of the last level of the factor vs. the reference level. If we want to extract the results for a specific comparison other than that, we have to specify this using the contrast argument. This, specifically, applies to dds1, where I want to extract the results for the comparison of TOL0_vs_TOL20, as well as that for SEN0_vs_SEN20. To get this, I have to provide the comparison I want using the contrast argument, which follows the pattern `c("factor", "testlevel", "reflevel")`. So for TOL0_vs_TOL20 this corresponds to: `c("genotemp", "TOL0", "TOL20")`.  
+
+The `results` function is also the place to specify how p-values should be adjusted and where we later want to set the cut for the alpha-level. By default, `alpha = 0.1`, which I will change to `alpha = 0.05` everywhere. 
+For adjustment of p-values, I want to try different methods: 
+* "bonferroni": although, `?p.adjust` in R says "There seems no reason to use the unmodified Bonferroni correction because it is dominated by Holm's method, which is also valid under arbitrary assumptions.”, I will use Bonferroni correction to be able to compare the output to the results we obtained when we used FeatureCounts after deduplication. 
+* "holm": I initially did not plan to include 'holm', but as it seems to be preferred over (but still similar to) bonferroni, I decided to include it, as well. 
+* "BH": the Benjamini&Hochberg method is the default and will be included, too. 
+* "IHW": stands for "independent Hypothesis weighting". It comes with it's own package (which is already loaded), and is not accessible via the `pAdjustMethod` argument. The [IHW vignette](https://bioconductor.org/packages/release/bioc/vignettes/IHW/inst/doc/introduction_to_ihw.html#fwer-control-with-ihw) describes that in can operate in two modes: 
+*"The standard IHW method [...] controls the FDR by using a weighted Benjamini-Hochberg procedure with data-driven weights. The same principle can be applied for FWER control by using a weighted Bonferroni procedure. Everything works exactly [the same], just use the argument adjustment_type.."*
+
+
+Naming conventions for results objects: 
+* "res" will be the base name for all results objects, followed by the digit, which refers to the corresponding dds object (i.e. res1 for all results extracted from dds1)
+* the pAdjustMethod (or filterFun) is indicated, using the following abbreviations:
+    + bonf = "bonferroni"
+    + holm = "holm"
+    + bh = "BH" 
+    + ihw.bh = "IHW" (FDR control)
+    + ihw.fwer = "IHW" (FWER [= Bonferroni] control)
+* this is followed by ".05" to indicate alpha
+* when more than one comparison is extracted with otherwise identical settings, the comparison is indicated at the end of the name.
+
+
+First I run "bh", "bonferroni", and "holm" for 'res1...' objects, then for 'res2...' and 'res3...'. The combinations different parameters increases the number of elements we have to carry along quite drastically (just a warning).
+
+IHW will be performed below. There, the code looks slightly different. 
+
+
+** update 2020-11-11: dds4 is again included. Further analyses for the method we use for dds4 are separate from dds1, dds2 and dds3. They will be dealt with in **an extra section ("Analyses and Results for dds4")**.
+
+
+```{r res}
+
+# results for dds
+
+res <- DESeq2::results(dds)
+res_gbpl1 <- DESeq2::results(dds, contrast = contrast_gbpl1)
+res_gbpl3 <- DESeq2::results(dds, contrast = contrast_gbpl3)
+res_oex <- DESeq2::results(dds, contrast = contrast_oex)
+
+head(res)
+head(res_gbpl1)
+head(res_gbpl3)
+head(res_oex)
+```
+With this, we are done calculating the "regular" statistics, without LFC shrinkage, which comes up next. Before I go on, we can export the results we just pulled out of the dds objects. For this, I order the results from lowest to highest padj values (optional), and create data.frame equivalents of each res object (mandatory - otherwise export doesn't work), which I export to a .txt file. 
+In order to process all result objects in one go, I put all of the (deseq)res objects in a list and loop through that list.
+
+The results carrying an "ihw.fwer" or "ihw.bh" suffix are treated slightly different, as they belong to another class (ihwResult vs. DESeqResults). 
+
+
+```{r resexports1}
+
+resdf <- res[order(res$padj),]       # order element res by padj
+ 
+ resdf <- as.data.frame(resdf)        # convert ordered element to df
+     
+ head(resdf)
+# 
+# # write the df to a table under ./output/ use the date and the name of the df as file name.
+#   
+# write.table(resdf, file = paste0("./output/", Sys.Date(), "_res-dds.txt", sep = ""), sep = "\t")
+#                                             
+```
+
+#### Annotate
+
+
+##### TxDb
+
+Gene info should be accessible from the TxDb package. Let's see what the Arabidopsis TxDb Package contains...
+
+```{r installtxdbAt2}
+
+### Leave commented if it's already installed!
+
+# if (!requireNamespace("BiocManager", quietly = TRUE))
+#     install.packages("BiocManager")
+# 
+# BiocManager::install("TxDb.Athaliana.BioMart.plantsmart28")
+
+```
+
+
+```{r txdbAtlib3}
+
+library(TxDb.Athaliana.BioMart.plantsmart28)
+
+```
+
+
+```{r txdbAtlib4}
+
+ls("package:TxDb.Athaliana.BioMart.plantsmart28") 
+
+columns(TxDb.Athaliana.BioMart.plantsmart28)
+
+
+keytypes(TxDb.Athaliana.BioMart.plantsmart28)
+
+head(keys(TxDb.Athaliana.BioMart.plantsmart28))
+head(keys(TxDb.Athaliana.BioMart.plantsmart28, keytype = "GENEID"))
+
+
+### make life a little easier
+
+txdb <- TxDb.Athaliana.BioMart.plantsmart28
+txdb
+
+class(txdb)
+```
+
+##### OrgDb
+
+```{r orgAtlib1}
+
+library(org.At.tair.db)
+
+```
+
+
+```{r orgdbAt}
+
+ls("package:org.At.tair.db") 
+
+columns(org.At.tair.db)
+
+
+keytypes(org.At.tair.db)
+
+head(keys(org.At.tair.db))
+head(keys(org.At.tair.db, keytype = "GENENAME"))
+head(keys(org.At.tair.db, keytype = "SYMBOL"))
+head(keys(org.At.tair.db, keytype = "TAIR"))
+### make life a little easier
+
+orgdb <- org.At.tair.db
+orgdb
+
+class(orgdb)
+
+
+```
+
+
+```{r reslist}
+reslist <- list("res_gbpl1" = res_gbpl1, 
+                "res_gbpl3" = res_gbpl3, 
+                "res_oex" = res_oex)
+               
+```
+
+
+##### Creating a df to map gene descriptiona and symbols to "AT#G#####"-type geneIDs 
+
+
+```{r reslistanno}
+for (i in seq_along(reslist)){
+  
+  geneID <- rownames(reslist[[i]])
+  
+  reslist[[i]]$symbol <- mapIds(org.At.tair.db,     # object to extract data from
+                                keys = geneID,      # geneIDs just extracted from the `res` object see function -1) 
+                                column = "SYMBOL",  # entrys from that column are extracted 
+                                keytype  ="TAIR",   # to values from *which column* do the ´keys´ provided above correspond?
+                                multiVals="first"   # how to handle one-to-many assignments (here: only map first)
+                                )
+
+
+## adding GENENAME (= descriptions) to the geneID-backbone (-keys)
+## aka:repeat above command, but this time extract values from the "GENENAME" column 
+## (and store them in a column of anno.df termed "description")
+  
+  reslist[[i]]$description <- mapIds(org.At.tair.db,   
+                                     keys = geneID,    
+                                     column = "GENENAME", # entrys from that column are extracted 
+                                     keytype  ="TAIR",  
+                                     multiVals="first")
+  
+}
+```
+
+<!-- For when there is only one `res` object -->
+<!-- ```{r resanno} -->
+<!-- # rownames of the 'res' object correspond to the GeneIDs (for which mapped reads were counted). They become the skeleton for the annotation dataframe ... -->
+<!-- geneID <- rownames(res) -->
+
+
+
+<!-- # ... and are about to become the "keys" to search for within `orgdb` -->
+
+<!-- ## adding gene symbols to the geneID(-keys) -->
+
+<!-- res$symbol <- mapIds(org.At.tair.db,     # object to extract data from -->
+<!--                      keys = geneID,      # geneIDs just extracted from the `res` object see function -1)  -->
+<!--                      column = "SYMBOL",  # entrys from that column are extracted  -->
+<!--                      keytype  ="TAIR",   # to values from *which column* do the ´keys´ provided above correspond? -->
+<!--                      multiVals="first"   # how to handle one-to-many assignments (here: only map first) -->
+<!--                      ) -->
+
+
+<!-- ## adding GENENAME (= descriptions) to the geneID-backbone (-keys) -->
+<!-- ## aka:repeat above command, but this time extract values from the "GENENAME" column  -->
+<!-- ## (and store them in a column of anno.df termed "description") -->
+
+<!-- res$description <- mapIds(org.At.tair.db,    -->
+<!--                           keys = geneID,     -->
+<!--                           column = "GENENAME", # entrys from that column are extracted  -->
+<!--                           keytype  ="TAIR",   -->
+<!--                           multiVals="first") -->
+<!-- ``` -->
+
+
+
+```{r resexports2}
+
+
+for (i in seq_along(reslist)){                 # START OF LOOP
+    
+    resdf <- reslist[[i]][order(reslist[[i]]$padj),]      # order element i by padj
+    resdf <- as.data.frame(resdf)                         # convert ordered element to df
+    
+    resname <- names(reslist[i])                          # store name of list coponent
+  
+    
+    
+  # write the df to a table under ./output/ use the date and the name of the df as file name.
+  
+    # write.table(resdf, file = paste0("./output/", Sys.Date(), "_", resname, ".txt", sep = ""), sep = "\t")
+                                            
+}                                             # END OF LOOP
+
+```
+
+
+
+
+<!-- ```{r resannotated} -->
+
+<!-- res.anno.df <- res[order(res$padj),] -->
+<!-- res.anno.df <- as.data.frame(res.anno.df) -->
+
+<!-- head(res.anno.df) -->
+
+<!-- write.table(res.anno.df, file = paste0("./output/", Sys.Date(), "_res-dds-annotated.txt", sep = ""), sep = "\t") -->
+
+
+<!-- ``` -->
+
+
+#### In a Nutshell - looking at summaries 
+
+To get a glimpse on the results we just extracted, we can use `summary`. Again, this would be a little bit much to type for all `r length(reslist)` individual objects , so I try to construct a loop, which first filters for genes with a log2FoldChange of > |1| and a padj < 0.05. Because although we specified alpha already, this did not throw out genes with a higher padj, instead it  
+
+
+```{r summaries}
+
+# print summary of each element in the results-list if the object is a DESeqResultsobject
+
+for (i in seq_along(reslist)){
+  
+  print(names(reslist[i]))
+  summary(reslist[[i]])
+  print(sum(((reslist[[i]]$padj < 0.05) & ((reslist[[i]]$log2FoldChange >= 1) | (reslist[[i]]$log2FoldChange <= -1))), na.rm=TRUE))
+  
+  }
+
+
+```
+
+
+<!-- ```{r summaries} -->
+
+<!-- # print summary  -->
+<!-- summary(res) -->
+
+<!-- sum((res$padj < 0.05) & ((res$log2FoldChange >= 1) | (res$log2FoldChange <= -1)), na.rm=TRUE) -->
+
+
+<!-- ``` -->
+
+
+
+#### Shrinkage of LFCs 
+
+["Shrinkage of effect size (LFC estimates) is useful for visualization and ranking of genes."](https://bioconductor.org/packages/release/bioc/vignettes/DESeq2/inst/doc/DESeq2.html#interactions) Some sort of LFC shrinkage ran automatically in the earlier versions of DESeq2, which has by now been deprecated. It can be called manually, by running its own command, which by default now (as of 04-2020) applies a new type of shrinkage method. For this method to work, we have to run `lfcShrink`, specifying the dds object and (either the contrast when ashr method is used, or, for the default method) the coefficient for which we want LFCs to be shrunken. The names of the coefficients in a dds can be called by asking for the `resultsNames` of a given dds. 
+
+
+```{r resultsnames}
+
+# check names of coefficients (required for shrinkage with apeglm)
+
+resultsNames(dds)
+
+```
+
+
+For dds1 we see, that one of the coefficients we need is missing ("Genotemp_TOL0_vs_TOL20"). (For all other, we don't run into this problem) This is because only comparisons to the reference level are included by default (which we set to be SEN20). I thought, it might work nevertheless, but turns out, it does not. After checking if Professor Internet has any suggestion on this problem, I found [a solution directly on Bioconductor](https://support.bioconductor.org/p/123247/): 
+
+
+"The vignette states that:
+
+    Instead, one need only run nbinomWaldTest to re-estimate MLE coefficients – these are necessary for apeglm – and then run lfcShrink specifying the coefficient of interest in `resultsNames(dds)`.
+
+    We give some examples below of producing equivalent designs for use with coef. We show how the coefficients change with `model.matrix`, but the user would, for example, either change the levels of `dds$condition` or replace the design using `design(dds)<-`, then run `nbinomWaldTest` followed by `lfcShrink`."
+    
+In code, this translates to the following steps: 
+
+* run DESeq
+
+* shrink LFCs and save the results for comparisons/coefficients that are available 
+
+* relevel the "Genotemp" factor (e.g. make TOL20 the reference level to get the coefficient for TOL0_vs_TOL20: dds1$Genotemp <- relevel(dds1$Genotemp, ref = "TOL20")
+
+* run nbinomWaldTest to re-estimate MLE coefficients: dds1 <- nbinomWaldTest(dds1)
+
+* resultsNames(dds1) should then contain Genotemp_TOL0_vs_TOL20, therefore you can then 
+
+* shrink LFCs for remaining comparison(s) (in case there were still more coefficients remaining, repeat releveling etc da capo al fine). The important thing is to NOT run DESeq again on the same object, as is would then re-estimate size factors and dispersions using the new reference level. By only running nbinomWaldTest again, this does not happen, but we get the coefficient we want.
+
+Names of the shrunken result objects will be similar to those above and followed by ".apeglm" to indicate shrinkage. However, as the shrinking only affects LFCs (the their SDs), we don't have to run the shrinkage for every pvalue adjustment method we used, but instead only once for every comparison, aka contrast aka coefficent... 
+
+```{r lfcShrink}
+
+# starting with results from dds1, where coefficient is already available
+
+res_gbpl1.apeglm <- lfcShrink(dds, 
+                              coef="sample_gbpl1.1_vs_wt",
+                              type = "apeglm")
+
+
+res_gbpl3.apeglm <- lfcShrink(dds, 
+                              coef="sample_gbpl3.5_vs_wt",
+                              type = "apeglm")
+
+res_oex.apeglm <- lfcShrink(dds, 
+                              coef="sample_GBPL3.ox_vs_wt",
+                              type = "apeglm")
+
+```
+
+
+OK... now, we should have all results we want for now. I put the shrunken ones in a list, as well; export them as above and then good-night for today. 
+
+
+
+
+
+```{r reslistshrunk}
+
+reslist.shrunk <- list("res_gbpl1.apeglm" = res_gbpl1.apeglm,
+                       "res_gbpl3.apeglm" = res_gbpl3.apeglm,
+                       "res_oex.apeglm" = res_oex.apeglm)
+```
+
+
+```{r reslistshrunkanno}
+for (i in seq_along(reslist)){
+  
+  geneID <- rownames(reslist.shrunk[[i]])
+  
+  reslist.shrunk[[i]]$symbol <- mapIds(org.At.tair.db,     # object to extract data from
+                                keys = geneID,      # geneIDs just extracted from the `res` object see function -1) 
+                                column = "SYMBOL",  # entrys from that column are extracted 
+                                keytype  ="TAIR",   # to values from *which column* do the ´keys´ provided above correspond?
+                                multiVals="first"   # how to handle one-to-many assignments (here: only map first)
+                                )
+
+
+## adding GENENAME (= descriptions) to the geneID-backbone (-keys)
+## aka:repeat above command, but this time extract values from the "GENENAME" column 
+## (and store them in a column of anno.df termed "description")
+  
+  reslist.shrunk[[i]]$description <- mapIds(org.At.tair.db,   
+                                     keys = geneID,    
+                                     column = "GENENAME", # entrys from that column are extracted 
+                                     keytype  ="TAIR",  
+                                     multiVals="first")
+  
+}
+```
+
+
+```{r exportshrunkres}
+
+
+for (i in seq_along(reslist.shrunk)){
+  
+  
+  # order element i by padj
+  resdf.shrunk <- reslist.shrunk[[i]][order(reslist.shrunk[[i]]$padj),]     
+  
+  # convert ordered element to df
+  resdf.shrunk <- as.data.frame(resdf.shrunk)       
+  
+  # store name of list corresponding listelement
+  resname.shrunk <- names(reslist.shrunk[i])                          
+  
+  # write the df to a table under ./output/ use the date and the name of the df as file name.
+ # write.table(resdf.shrunk, file = paste0("./output/", Sys.Date(), "_", resname.shrunk, ".txt", sep = ""), sep = "\t")
+  
+}
+
+```
+
+### Visualization of results
+
+
+##### MA plots
+
+
+"An MA-plot (Dudoit et al. 2002) provides a useful overview for an experiment with a two-group comparison (Figure below)."
+
+
+```{r MAplots}
+
+
+for (i in seq_along(reslist)){
+
+MA <- DESeq2::plotMA(reslist[[i]], ylim=c(-5,5))
+print(MA)
+
+}
+
+
+for (i in seq_along(reslist.shrunk)){
+
+MA <- DESeq2::plotMA(reslist.shrunk[[i]], ylim=c(-5,5))
+print(MA)
+
+}
+
+
+```
+
+We can label individual points on the MA-plot as well. Here we use the with R function to plot a circle and text for a selected row of the results object. Within the with function, only the baseMean and log2FoldChange values for the selected rows of res are used.
+
+
+```{r labeledMAplots}
+
+
+topGene.apeglm <- list()
+
+for (i in seq_along(reslist.shrunk)){
+  
+  topGene.apeglm[i] <- rownames(reslist.shrunk[[i]])[which.min(reslist.shrunk[[i]]$padj)]
+  
+  DESeq2::plotMA(reslist.shrunk[[i]], ylim = c(-7,7))
+  with(reslist.shrunk[[i]][topGene.apeglm[[i]], ], {
+    points(baseMean, log2FoldChange, col="tomato", cex=2, lwd=2)
+    text(baseMean, log2FoldChange, topGene.apeglm[[i]], pos=2, col="tomato")
+    })
+  }
+
+```
+
+
+#### histogramms of p-values
+
+
+Another useful diagnostic plot is the histogram of the p values (figure below). This plot is best formed by excluding genes with very small counts, which otherwise generate spikes in the histogram.
+
+
+```{r hist}
+
+
+for (i in seq_along(reslist)){
+  
+  hist(reslist[[i]]$pvalue[reslist[[i]]$baseMean > 1], 
+       main = paste(names(reslist[i])), 
+       xlab = paste(names(reslist[i]), ": pvalues of genes with basemean > 1"), 
+       breaks = 0:20/20, col = "grey50", border = "white")
+  }
+
+
+```
+
+
+#### Plotting counts of most significant DEgenes
+
+
+For these plots, we do the following ....
+* pick a results object
+* extract the name of the gene with the lowest padj - aka the topGene
+* use the `plotCounts` function that comes with DESeq
+    + specify the dds object that the results object is derived from, so that the function can grep the counts for the topGene
+    + if you want to use different shapes / colors etc. based on some feature of the sample (genotype or temp or whatever), specify these factors via the `intgroup` argument
+    
+    
+This again, would require copy+paste-ing till I die, if I do it individually for each topGene (or res object). Therefore, I loop through lists again. This time, however, we need the matching dds object for each res object, cause the dds is where the function greps the counts from. I therefore create a list, `ddslist` , in which I collect dds1, dds2 and dds3 (all of them named, i.e. `"ddsX" = ddsX`). Additionally, I create a vector (`assigndds`) with 16 elements corresponding to the name of the dds's in the same order as the corresponding res objects occur in `reslist`. (i.e. 8x "dds1", 4X "dds2", 4x "dds3"). This allows us to access the correct dds for each result, i.e. for each iteration through the for loop (i).
+    
+
+  # plotCounts(ddslist[[ (assigndds[[i]]) ]], gene = topGene[[i]], intgroup=c("genotype", "temp"))
+  
+  
+```{r topgene}
+
+# create list to store the top genes in 
+
+topGene <- list()
+
+
+# for each res object
+for (i in seq_along(reslist)){
+  
+  # store the topGene (lowest padj) as list element in the topGene-list
+  topGene[i] <- rownames(reslist[[i]])[which.min(reslist[[i]]$padj)] 
+ 
+  # store plot data as object (dataframe)
+  geneCounts <- plotCounts(dds, 
+                           gene = topGene[[i]], 
+                           intgroup = "sample", 
+                           returnData = TRUE)
+  
+  # modify plot with ggplot and store in object plot 
+  plot <- ggplot(geneCounts, aes(x = sample, y = count)) + 
+    scale_y_log10() +  
+    geom_beeswarm(cex = 3) + 
+    ggtitle(paste(names(reslist[i]), ": ", topGene[[i]]))
+  
+  # Have to explicitly ask to print plot in order to draw plot 
+  print(plot)
+  
+}
+  
+
+```
+
+
+
+
+### Seeing is believing: Visualizations and Plots 
+
+
+#### Arbitrary filters, meaningful genes: Filtering for DEG by padj and lfc and preps for plots
+
+
+The following section is adopted mostly from [Episode5](https://hbctraining.github.io/DGE_workshop/lessons/05_DGE_DESeq2_analysis2.html) & [Episode6](https://hbctraining.github.io/DGE_workshop/lessons/06_DGE_visualizing_results.html) of [the Harvard DGE Workshop](https://github.com/hbctraining/DGE_workshop).
+
+Like we did in prior analyses, we set an arbitrary cutoff for the padj and the log2Foldchange. 
+I will assign variables to the cutoff values, so that I don't have to specify the numbers over and over. 
+
+```{r sig cutoffs}
+
+padj.cutoff <- 0.05
+lfc.cutoff <- 1
+
+
+```
+
+`DESeqResults` can be difficult to work with in downstream analysis and particularly visualization. We therefore convert them to tibbles.
+
+```{r allreslist}
+
+all.reslist <- list("res_gbpl1" = res_gbpl1,
+                    "res_gbpl3" = res_gbpl3,
+                    "res_oex" = res_oex,
+                    "res_gbpl1.apeglm" = res_gbpl1.apeglm,
+                    "res_gbpl3.apeglm" = res_gbpl3.apeglm,
+                    "res_oex.apeglm" = res_oex.apeglm)
+
+```
+
+
+
+```{r res2tibbles}
+
+
+# create list to accommodate results tibbles
+
+reslist_tb <- list()
+
+
+# loop through reslist, convert each element to tibble and order by padj
+
+for (i in seq_along(all.reslist)){
+  
+  reslist_tb[[i]] <- all.reslist[[i]] %>% 
+    data.frame() %>%
+    rownames_to_column(var="gene") %>% 
+    as_tibble() %>%
+    arrange(padj)
+  }
+
+names(reslist_tb) <- names(all.reslist)
+
+
+reslist_tb
+```
+
+Next, we create a list to accommodate the filtered tibbles with significant DEGs only the pre-defined thresholds on padj and lfc:
+
+```{r sigrestibbles}
+
+siglist_tb <- lapply(reslist_tb, 
+                     function(x) dplyr::filter(x, padj < padj.cutoff & 
+                                                 abs(log2FoldChange) > lfc.cutoff))
+
+```
+
+
+We'll also create tibble objects from the `sampledat` and `normcounts` data frames before we start plotting. This will enable us to use the tidyverse functionality more easily.
+
+```{r metatibbles}
+
+# Create tibble from sampledat including row names
+
+samples_tb <- sampledat %>% 
+rownames_to_column(var="ID") %>% 
+as_tibble()
+
+```
+
+We normalized counts for each dds separately, therefore, we collect the normcount tables in a list again and also create a lookup vector, so that we can later assign the correct `normcounts` to the corresponding `res`.
+
+```{r counttibbles}
+
+# create tibble containing normalized counts over all samples
+
+normcounts_tb <- normcounts %>% 
+    data.frame() %>% 
+    rownames_to_column(var="gene") %>% 
+    as_tibble() 
+
+```
+
+#### Plot of the tops: Plotting normcounts of top20 genes (by padj) 
+
+`siglist_tb` already contains the significant genes only, which we arbitrarily defined as those genes, where the padj is less than 0.05 and expression at least doubled under any condition (i.e. the absolute lfc is greater than 1). Importantly, we have already ordered each table from lowest to highest padj. This allows us to easily extract the top 20 genes from each res table. 
+
+
+```{r top20}
+
+# Extract top 20 gene entries from the 'gene' column of each ordered table as a character vector
+
+top20_genes_list <- lapply(siglist_tb, function(x) head(dplyr::pull(x, gene), n = 20))
+
+
+# combine all top20s and make vector comprising all unique ones
+
+top20_genes_allunique <- unique(unlist(top20_genes_list))
+        
+```
+        
+Using either the `top20_genes_list`, or the collapsed vector, `top20_genes_allunique`, we can extract the corresponding normalized counts for all samples from the normcounts_list, or from the combined normcounttable (`normcounts_all`). We'll start with the latter and easier task, where we have one gene list to filter one normcount table only. 
+
+
+```{r top20counts}
+
+# all normcounts of all unique top20 genes
+
+top20_normcounts <- normcounts_tb %>% filter(gene %in% top20_genes_allunique)
+
+top20_normcounts
+```
+
+In order to make it a little easier for ggplot2 to handle each table the way we want, we have to `gather` all counts in a single column, moving the corresponding replicate ID to the same row (i.e. gather data from all columns to obtain a ("normcount.origin",) "gene", "replicate", and a "normcount" column).
+
+```{r gathertop20counts}
+
+## all unique top20s in one table
+
+# Gathering the columns to have normalized counts to a single column
+
+gathered_top20_normcounts <- top20_normcounts %>% 
+  # column 1 and 2 carry normcount origins and geneIDs
+  gather(colnames(top20_normcounts)[2:9], key = "ID", value = "normalized_counts")
+
+# check gathered table
+head(gathered_top20_normcounts)
+
+# add (join) samples_tb 
+gathered_top20_normcounts <- inner_join(samples_tb, gathered_top20_normcounts)
+
+```
+
+.... phew... quite a bit of prep. But now we're ready to plot
+
+```{r top20normcountplot}
+
+## plot using ggplot2
+ggplot(gathered_top20_normcounts) +
+        geom_point(aes(x = gene, y = normalized_counts, color = sample)) +
+        scale_y_log10() +
+        xlab("Genes") +
+        ylab("log10 Normalized Counts") +
+        ggtitle("Top 20 Significant DE Genes") +
+        theme_bw() +
+        theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+        theme(plot.title = element_text(hjust = 0.5))
+	
+
+
+```
+
+And here the plots showing the normcounts for the top20 for each res object individually
+```{r top20ncindividualplots}
+
+top20ncplot <- ggplot(gathered_top20_normcounts) + 
+  geom_point(aes(x = gene, y = normalized_counts, color = sample)) +
+    scale_y_log10() +
+  xlab("Genes") +
+  ylab("log10 Normalized Counts") +
+  ggtitle("Top 20 Significant DE Genes between mutants and WT") +
+  theme_bw() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+  theme(plot.title = element_text(hjust = 0.5))
+
+plot(top20ncplot)
+
+```
+
+
+	
+####	Heatmaps
+
+In addition to plotting subsets, we could also extract the normalized values of all the significant genes and plot a heatmap of their expression using `pheatmap()`.
+
+
+```{r siggenesheatmaps01}
+# Extract normalized expression for significant genes (2:12), and set the gene column (1) to row names
+
+siglist_normcounts <- list() 
+
+for (i in seq_along(siglist_tb)){
+  
+  siglist_normcounts[[i]] <- dplyr::filter(normcounts_tb, gene %in% siglist_tb[[i]]$gene) 
+}
+
+names(siglist_normcounts) <- names(siglist_tb)
+
+
+
+# Now let’s draw the heatmap using pheatmap:
+
+### Annotate our heatmap (optional)
+annotation <- samples_tb %>% 
+	dplyr::select(ID, sample) %>% 
+	data.frame(row.names = "ID")
+
+annotation
+
+### Set a color palette
+heat_colors <- brewer.pal(4, "YlOrRd")
+```
+
+
+```{r siggenesheatmaps02}
+### Run pheatmap through elements of siglist_normcounts
+
+
+for (i in seq_along(siglist_normcounts)){ 
+  
+  sigi <- column_to_rownames(as.data.frame(siglist_normcounts[[i]]), var = "gene")
+  pheatmap(sigi, 
+           color = heat_colors,
+           cluster_rows = T, 
+           show_rownames = F,
+           annotation = annotation, 
+           border_color = NA, 
+           fontsize = 10, 
+           scale = "row",
+           fontsize_row = 10, 
+           height = 20, 
+           main = paste(names(siglist_normcounts[i])))
+}
+
+```
+
+
+#### Volcano plots
+
+Volcano plots show the -log10(padj) against the lfc for all genes. To distinguish significant DEGs from the rest, we add a column to each table in reslist_tb, where we label the sig. DEGs
+
+
+```{r volcanos}
+
+## Obtain logical vector where TRUE values denote padj values < 0.05 and fold change > 1.5 in either direction
+
+reslist_tb <- lapply(reslist_tb, function(x) mutate(x, 
+                                                    DEGthreshold = padj < 0.05 &
+                                                    abs(log2FoldChange) > 1))
+
+
+for (i in seq_along(reslist_tb)){
+  
+  geneID <- reslist_tb[[i]]$gene
+  
+  reslist_tb[[i]]$symbol <- mapIds(org.At.tair.db,     # object to extract data from
+                                   keys = geneID,      # geneIDs just extracted from `reslist_tb`-object see function -1) 
+                                   column = "SYMBOL",  # entrys from that column are extracted
+                                   keytype  ="TAIR",   # to values from *which column* do the ´keys´ provided above correspond?
+                                   multiVals="first"   # how to handle one-to-many assignments (here: only map first)
+                                )
+
+
+## adding GENENAME (= descriptions) to the geneID-backbone (-keys)
+## aka:repeat above command, but this time extract values from the "GENENAME" column 
+## (and store them in a column of anno.df termed "description")
+  
+  reslist_tb[[i]]$description <- mapIds(org.At.tair.db,   
+                                        keys = geneID,  
+                                        column = "GENENAME", # entrys from that column are extracted 
+                                        keytype  ="TAIR",  
+                                        multiVals="first")
+  
+}
+
+## Genes are already ordered by padj! Create a column to indicate which genes to label (will be filled when looping through list)
+
+reslist_tb <- lapply(reslist_tb, function(x) mutate(x, genelabels = "")) 
+                  
+                  
+## Volcano plots including labels for the top10 
+
+
+for (i in seq_along(reslist_tb)){
+  
+  
+  reslist_tb[[i]]$genelabels[1:10] <- reslist_tb[[i]]$symbol[1:10]
+  
+  labeledvolcano <- ggplot(reslist_tb[[i]], aes(x = log2FoldChange, y = -log10(padj))) +
+    geom_point(aes(colour = DEGthreshold)) +
+    geom_text_repel(aes(label = reslist_tb[[i]]$genelabels)) +
+    ggtitle(paste(names(reslist_tb[i]))) +
+    xlab("log2 fold change") + 
+    ylab("-log10 adjusted p-value") +
+    coord_cartesian() + 
+    theme(legend.position = "none",
+          plot.title = element_text(size = rel(1.5), hjust = 0.5),
+          axis.title = element_text(size = rel(1.25)))
+  
+  plot(labeledvolcano)
+  
+  }
+
+```
+
+
+```{r session}
+
+sessionInfo()
+
+```
+
+
+## The usual clean-up
+
+```{r cleanup}
+
+# Clear environment
+rm(list = ls()) 
+
+# Clear packages
+pacman::p_unload(all)  # Remove all add-ons
+
+# Clear console
+cat("\014")  # ctrl+L
+
+# Clear mind :)
+
+## finalized: 2020-10-12
+
+```

@@ -16,7 +16,7 @@
 <script src="site_libs/header-attrs-2.9/header-attrs.js"></script>
 <script src="site_libs/jquery-1.11.3/jquery.min.js"></script>
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<link href="site_libs/bootstrap-3.3.5/css/bootstrap.min.css" rel="stylesheet" />
+<link href="site_libs/bootstrap-3.3.5/css/cosmo.min.css" rel="stylesheet" />
 <script src="site_libs/bootstrap-3.3.5/js/bootstrap.min.js"></script>
 <script src="site_libs/bootstrap-3.3.5/shim/html5shiv.min.js"></script>
 <script src="site_libs/bootstrap-3.3.5/shim/respond.min.js"></script>
@@ -264,24 +264,1500 @@ $(document).ready(function () {
 </div>
 
 
-<div id="r-markdown" class="section level2">
-<h2>R Markdown</h2>
-<p>This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <a href="http://rmarkdown.rstudio.com" class="uri">http://rmarkdown.rstudio.com</a>.</p>
-<p>When you click the <strong>Knit</strong> button a document will be generated that includes both content as well as the output of any embedded R code chunks within the document. You can embed an R code chunk like this:</p>
-<pre class="r"><code>summary(cars)</code></pre>
-<pre><code>##      speed           dist       
-##  Min.   : 4.0   Min.   :  2.00  
-##  1st Qu.:12.0   1st Qu.: 26.00  
-##  Median :15.0   Median : 36.00  
-##  Mean   :15.4   Mean   : 42.98  
-##  3rd Qu.:19.0   3rd Qu.: 56.00  
-##  Max.   :25.0   Max.   :120.00</code></pre>
+<div id="analysis-of-differential-expression-between-arabidopsis-gbpl3-5-and-wt-using-deseq2-with-featurecounts-huang-et-al-2021-data" class="section level1">
+<h1>Analysis of differential expression between Arabidopsis gbpl3-5 and WT using DESeq2 with featureCounts Huang et al 2021 data</h1>
+<div id="libraries" class="section level4">
+<h4>Libraries</h4>
+<p>First of all, I load several libraries. All of them were used in the tutorials referred to above.</p>
+<pre class="r"><code>library(DESeq2)
+library(tidyverse)
+library(vsn)
+library(pheatmap)
+library(RColorBrewer)
+library(PoiClaClu)
+library(glmpca)
+library(ggbeeswarm)
+library(apeglm)
+library(genefilter)
+library(IHW)
+library(gdata)
+library(magrittr)
+library(RUVSeq)
+library(ggplot2)
+library(ggrepel)
+library(data.table)
+# library(ComplexHeatmap)
+library(eulerr)
+library(UpSetR)</code></pre>
 </div>
-<div id="including-plots" class="section level2">
-<h2>Including Plots</h2>
-<p>You can also embed plots, for example:</p>
-<p><img src="RNASeq_gbpl3-5_files/figure-html/pressure-1.png" width="672" /></p>
-<p>Note that the <code>echo = FALSE</code> parameter was added to the code chunk to prevent printing of the R code that generated the plot.</p>
+<div id="data-import" class="section level4">
+<h4>Data import</h4>
+<p>import sample info, have a quick look and move on to import countdata for all samples. In both cases, we have to modify some things and most importantly, filter like hell until we only have left what is actually used.</p>
+<p>DESeq2 basically just requires 2 things: * sampledata: a table containing info about the samples/replicates and the properties of the samples, particularly those which are to be compared against each other. I create this one from scratch * countdata: this I found on the SRA</p>
+<pre class="r"><code># import countdata from GEO project
+
+countdata &lt;- fread(&quot;https://www.ncbi.nlm.nih.gov/geo/download/?acc=GSE134651&amp;format=file&amp;file=GSE134651_RNAseq_counts_file.csv.gz&quot;)
+
+countdata</code></pre>
+<pre><code>##           GeneID wt_rep1 wt_rep2 gbpl-1_rep1 gbpl1-1_rep2 gbpl3-5_rep1 gbpl3-5_rep2 GBPL3-ox_rep1 GBPL3-ox_rep2
+##     1: AT5G06520       0       0           2            1            2            2             1             1
+##     2: AT1G50060       0       0           0            0            0            0             0             0
+##     3: AT5G05200     754     908         819          468          963         1235           856          1046
+##     4: AT4G18197      56      50          13            6           54           57            15            21
+##     5: AT1G20820       0       0           0            0            0            0             0             0
+##    ---                                                                                                         
+## 34263: AT3G01185       0       0           0            0            0            0             0             0
+## 34264: AT1G78860       1       3           1            4            4            7             4             7
+## 34265: AT1G51380       5       1           0            1            4            4             0             1
+## 34266: AT1G77525       0       0           0            0            0            0             0             0
+## 34267: AT3G56700       0       0           0            0            0            0             0             0</code></pre>
+<p>Now I create the sampletable from the IDs which correspond to all except the first column names of the countdata. I just tweak the colnames a little (exchanging dashes for dots)</p>
+<pre class="r"><code>colnames(countdata) &lt;- gsub(&quot;\\-&quot;, &quot;\\.&quot;, colnames(countdata))
+sampledata &lt;- tibble(ID = colnames(countdata), sample = gsub(&quot;\\_.*&quot;, &quot;&quot;, colnames(countdata)))
+sampledata &lt;- sampledata %&gt;% filter(ID != &quot;GeneID&quot;)
+sampledata</code></pre>
+<pre><code>## # A tibble: 8 x 2
+##   ID            sample  
+##   &lt;chr&gt;         &lt;chr&gt;   
+## 1 wt_rep1       wt      
+## 2 wt_rep2       wt      
+## 3 gbpl.1_rep1   gbpl.1  
+## 4 gbpl1.1_rep2  gbpl1.1 
+## 5 gbpl3.5_rep1  gbpl3.5 
+## 6 gbpl3.5_rep2  gbpl3.5 
+## 7 GBPL3.ox_rep1 GBPL3.ox
+## 8 GBPL3.ox_rep2 GBPL3.ox</code></pre>
+<pre class="r"><code># correcting sample name for gbpl1-1_rep1
+sampledata$sample &lt;- gsub(&quot;gbpl.1&quot;, &quot;gbpl1.1&quot;, sampledata$sample)
+sampledata</code></pre>
+<pre><code>## # A tibble: 8 x 2
+##   ID            sample  
+##   &lt;chr&gt;         &lt;chr&gt;   
+## 1 wt_rep1       wt      
+## 2 wt_rep2       wt      
+## 3 gbpl.1_rep1   gbpl1.1 
+## 4 gbpl1.1_rep2  gbpl1.1 
+## 5 gbpl3.5_rep1  gbpl3.5 
+## 6 gbpl3.5_rep2  gbpl3.5 
+## 7 GBPL3.ox_rep1 GBPL3.ox
+## 8 GBPL3.ox_rep2 GBPL3.ox</code></pre>
+</div>
+<div id="three-ingredients-to-make-a-dds-preparing-the-three-components-and-building-the-deseq2-dataset" class="section level3">
+<h3>Three ingredients to make a dds : preparing the three components and building the DESeq(2)-Dataset</h3>
+<p>The DeseqDataSet (or a summarizedExperiment, from which it is derived), has three components:</p>
+<ul>
+<li>coldata - corresponds to the sampledata. It contains info about the samples or replicates (i.e. for each column - or columnheader - of the countdata object).</li>
+<li>rowdata - holds info about the features, i.e. genes. It basically corresponds to “GeneID”, “Chr”, “Start”, “End”, “Strand” and “Length”, and this time, I’ll use the TxDb package, as for Arabidopsis there is one, yay!</li>
+<li>countmatrix - The actual feature counts; has to be a matrix and the counts have to be raw counts (i.e. not normalized or modified otherwise).</li>
+</ul>
+<p>All of these components can be build from the sample- and countdata objects. It’s basically like baking cake and we now have to weigh and measure the ingredients before stirring all of them together.</p>
+<div id="rowdata-rowranges" class="section level4">
+<h4>Rowdata / rowRanges</h4>
+<div id="txdb" class="section level5">
+<h5>TxDb</h5>
+<p>Gene info should be accessible from the TxDb package. Let’s see what the Arabidopsis TxDb Package contains…</p>
+<pre class="r"><code>### Leave commented if it&#39;s already installed!
+
+# if (!requireNamespace(&quot;BiocManager&quot;, quietly = TRUE))
+#     install.packages(&quot;BiocManager&quot;)
+# 
+# BiocManager::install(&quot;TxDb.Athaliana.BioMart.plantsmart28&quot;)</code></pre>
+<pre class="r"><code>library(TxDb.Athaliana.BioMart.plantsmart28)</code></pre>
+<pre class="r"><code>ls(&quot;package:TxDb.Athaliana.BioMart.plantsmart28&quot;) </code></pre>
+<pre><code>## [1] &quot;TxDb.Athaliana.BioMart.plantsmart28&quot;</code></pre>
+<pre class="r"><code>columns(TxDb.Athaliana.BioMart.plantsmart28)</code></pre>
+<pre><code>##  [1] &quot;CDSCHROM&quot;   &quot;CDSEND&quot;     &quot;CDSID&quot;      &quot;CDSNAME&quot;    &quot;CDSSTART&quot;   &quot;CDSSTRAND&quot;  &quot;EXONCHROM&quot;  &quot;EXONEND&quot;    &quot;EXONID&quot;    
+## [10] &quot;EXONNAME&quot;   &quot;EXONRANK&quot;   &quot;EXONSTART&quot;  &quot;EXONSTRAND&quot; &quot;GENEID&quot;     &quot;TXCHROM&quot;    &quot;TXEND&quot;      &quot;TXID&quot;       &quot;TXNAME&quot;    
+## [19] &quot;TXSTART&quot;    &quot;TXSTRAND&quot;   &quot;TXTYPE&quot;</code></pre>
+<pre class="r"><code>keytypes(TxDb.Athaliana.BioMart.plantsmart28)</code></pre>
+<pre><code>## [1] &quot;CDSID&quot;    &quot;CDSNAME&quot;  &quot;EXONID&quot;   &quot;EXONNAME&quot; &quot;GENEID&quot;   &quot;TXID&quot;     &quot;TXNAME&quot;</code></pre>
+<pre class="r"><code>head(keys(TxDb.Athaliana.BioMart.plantsmart28))</code></pre>
+<pre><code>## [1] &quot;AT1G01010&quot; &quot;AT1G01020&quot; &quot;AT1G01030&quot; &quot;AT1G01040&quot; &quot;AT1G01046&quot; &quot;AT1G01050&quot;</code></pre>
+<pre class="r"><code>head(keys(TxDb.Athaliana.BioMart.plantsmart28, keytype = &quot;GENEID&quot;))</code></pre>
+<pre><code>## [1] &quot;AT1G01010&quot; &quot;AT1G01020&quot; &quot;AT1G01030&quot; &quot;AT1G01040&quot; &quot;AT1G01046&quot; &quot;AT1G01050&quot;</code></pre>
+<pre class="r"><code>### make life a little easier
+
+txdb &lt;- TxDb.Athaliana.BioMart.plantsmart28
+txdb</code></pre>
+<pre><code>## TxDb object:
+## # Db type: TxDb
+## # Supporting package: GenomicFeatures
+## # Data source: BioMart
+## # Organism: Arabidopsis thaliana
+## # Taxonomy ID: 3702
+## # Resource URL: www.biomart.org:80
+## # BioMart database: plants_mart_28
+## # BioMart database version: ENSEMBL PLANTS 28 (EBI UK)
+## # BioMart dataset: athaliana_eg_gene
+## # BioMart dataset description: Arabidopsis thaliana genes (TAIR10 (2010-09-TAIR10))
+## # BioMart dataset version: TAIR10 (2010-09-TAIR10)
+## # Full dataset: yes
+## # miRBase build ID: NA
+## # transcript_nrow: 41671
+## # exon_nrow: 171013
+## # cds_nrow: 147494
+## # Db created by: GenomicFeatures package from Bioconductor
+## # Creation time: 2015-10-07 18:17:11 +0000 (Wed, 07 Oct 2015)
+## # GenomicFeatures version at creation time: 1.21.30
+## # RSQLite version at creation time: 1.0.0
+## # DBSCHEMAVERSION: 1.1</code></pre>
+<pre class="r"><code>class(txdb)</code></pre>
+<pre><code>## [1] &quot;TxDb&quot;
+## attr(,&quot;package&quot;)
+## [1] &quot;GenomicFeatures&quot;</code></pre>
+<pre class="r"><code>ebg &lt;- exonsBy(txdb, by = &quot;gene&quot;) 
+ebg &lt;- GRangesList(ebg)
+
+ebg</code></pre>
+<pre><code>## GRangesList object of length 33602:
+## $AT1G01010
+## GRanges object with 6 ranges and 2 metadata columns:
+##       seqnames    ranges strand |   exon_id         exon_name
+##          &lt;Rle&gt; &lt;IRanges&gt;  &lt;Rle&gt; | &lt;integer&gt;       &lt;character&gt;
+##   [1]        1 3631-3913      + |         1 AT1G01010.1.exon1
+##   [2]        1 3996-4276      + |         2 AT1G01010.1.exon2
+##   [3]        1 4486-4605      + |         3 AT1G01010.1.exon3
+##   [4]        1 4706-5095      + |         4 AT1G01010.1.exon4
+##   [5]        1 5174-5326      + |         5 AT1G01010.1.exon5
+##   [6]        1 5439-5899      + |         6 AT1G01010.1.exon6
+##   -------
+##   seqinfo: 7 sequences (1 circular) from an unspecified genome
+## 
+## $AT1G01020
+## GRanges object with 12 ranges and 2 metadata columns:
+##        seqnames    ranges strand |   exon_id          exon_name
+##           &lt;Rle&gt; &lt;IRanges&gt;  &lt;Rle&gt; | &lt;integer&gt;        &lt;character&gt;
+##    [1]        1 5928-6263      - |     22122 AT1G01020.1.exon10
+##    [2]        1 6437-7069      - |     22123  AT1G01020.1.exon9
+##    [3]        1 6790-7069      - |     22124  AT1G01020.2.exon8
+##    [4]        1 7157-7232      - |     22125  AT1G01020.1.exon8
+##    [5]        1 7157-7450      - |     22126  AT1G01020.2.exon7
+##    ...      ...       ...    ... .       ...                ...
+##    [8]        1 7762-7835      - |     22129  AT1G01020.2.exon5
+##    [9]        1 7942-7987      - |     22130  AT1G01020.2.exon4
+##   [10]        1 8236-8325      - |     22131  AT1G01020.2.exon3
+##   [11]        1 8417-8464      - |     22132  AT1G01020.2.exon2
+##   [12]        1 8571-8737      - |     22133  AT1G01020.2.exon1
+##   -------
+##   seqinfo: 7 sequences (1 circular) from an unspecified genome
+## 
+## $AT1G01030
+## GRanges object with 2 ranges and 2 metadata columns:
+##       seqnames      ranges strand |   exon_id         exon_name
+##          &lt;Rle&gt;   &lt;IRanges&gt;  &lt;Rle&gt; | &lt;integer&gt;       &lt;character&gt;
+##   [1]        1 11649-13173      - |     22134 AT1G01030.1.exon2
+##   [2]        1 13335-13714      - |     22135 AT1G01030.1.exon1
+##   -------
+##   seqinfo: 7 sequences (1 circular) from an unspecified genome
+## 
+## ...
+## &lt;33599 more elements&gt;</code></pre>
+<pre class="r"><code>head(names(ebg))</code></pre>
+<pre><code>## [1] &quot;AT1G01010&quot; &quot;AT1G01020&quot; &quot;AT1G01030&quot; &quot;AT1G01040&quot; &quot;AT1G01046&quot; &quot;AT1G01050&quot;</code></pre>
+</div>
+</div>
+<div id="countmatrix" class="section level4">
+<h4>Countmatrix</h4>
+<p>I start with the countmatrix, which corresponds to a subset of the countdata object. To get the matrix, I select the gene_IDs (they will become the rownames of the matrix), and the columns containing featureCounts obtained from the replicates that I want to include in the analysis.</p>
+<pre class="r"><code>countdata.filtered &lt;- countdata %&gt;% dplyr::filter(GeneID %in% names(ebg))
+
+countdata.filtered</code></pre>
+<pre><code>##           GeneID wt_rep1 wt_rep2 gbpl.1_rep1 gbpl1.1_rep2 gbpl3.5_rep1 gbpl3.5_rep2 GBPL3.ox_rep1 GBPL3.ox_rep2
+##     1: AT5G06520       0       0           2            1            2            2             1             1
+##     2: AT1G50060       0       0           0            0            0            0             0             0
+##     3: AT5G05200     754     908         819          468          963         1235           856          1046
+##     4: AT4G18197      56      50          13            6           54           57            15            21
+##     5: AT1G20820       0       0           0            0            0            0             0             0
+##    ---                                                                                                         
+## 28274: AT3G01185       0       0           0            0            0            0             0             0
+## 28275: AT1G78860       1       3           1            4            4            7             4             7
+## 28276: AT1G51380       5       1           0            1            4            4             0             1
+## 28277: AT1G77525       0       0           0            0            0            0             0             0
+## 28278: AT3G56700       0       0           0            0            0            0             0             0</code></pre>
+<pre class="r"><code>ebg.filtered &lt;- ebg[(names(ebg) %in% countdata.filtered$GeneID)]
+ebg.filtered</code></pre>
+<pre><code>## GRangesList object of length 28278:
+## $AT1G01010
+## GRanges object with 6 ranges and 2 metadata columns:
+##       seqnames    ranges strand |   exon_id         exon_name
+##          &lt;Rle&gt; &lt;IRanges&gt;  &lt;Rle&gt; | &lt;integer&gt;       &lt;character&gt;
+##   [1]        1 3631-3913      + |         1 AT1G01010.1.exon1
+##   [2]        1 3996-4276      + |         2 AT1G01010.1.exon2
+##   [3]        1 4486-4605      + |         3 AT1G01010.1.exon3
+##   [4]        1 4706-5095      + |         4 AT1G01010.1.exon4
+##   [5]        1 5174-5326      + |         5 AT1G01010.1.exon5
+##   [6]        1 5439-5899      + |         6 AT1G01010.1.exon6
+##   -------
+##   seqinfo: 7 sequences (1 circular) from an unspecified genome
+## 
+## $AT1G01020
+## GRanges object with 12 ranges and 2 metadata columns:
+##        seqnames    ranges strand |   exon_id          exon_name
+##           &lt;Rle&gt; &lt;IRanges&gt;  &lt;Rle&gt; | &lt;integer&gt;        &lt;character&gt;
+##    [1]        1 5928-6263      - |     22122 AT1G01020.1.exon10
+##    [2]        1 6437-7069      - |     22123  AT1G01020.1.exon9
+##    [3]        1 6790-7069      - |     22124  AT1G01020.2.exon8
+##    [4]        1 7157-7232      - |     22125  AT1G01020.1.exon8
+##    [5]        1 7157-7450      - |     22126  AT1G01020.2.exon7
+##    ...      ...       ...    ... .       ...                ...
+##    [8]        1 7762-7835      - |     22129  AT1G01020.2.exon5
+##    [9]        1 7942-7987      - |     22130  AT1G01020.2.exon4
+##   [10]        1 8236-8325      - |     22131  AT1G01020.2.exon3
+##   [11]        1 8417-8464      - |     22132  AT1G01020.2.exon2
+##   [12]        1 8571-8737      - |     22133  AT1G01020.2.exon1
+##   -------
+##   seqinfo: 7 sequences (1 circular) from an unspecified genome
+## 
+## $AT1G01030
+## GRanges object with 2 ranges and 2 metadata columns:
+##       seqnames      ranges strand |   exon_id         exon_name
+##          &lt;Rle&gt;   &lt;IRanges&gt;  &lt;Rle&gt; | &lt;integer&gt;       &lt;character&gt;
+##   [1]        1 11649-13173      - |     22134 AT1G01030.1.exon2
+##   [2]        1 13335-13714      - |     22135 AT1G01030.1.exon1
+##   -------
+##   seqinfo: 7 sequences (1 circular) from an unspecified genome
+## 
+## ...
+## &lt;28275 more elements&gt;</code></pre>
+<pre class="r"><code>countmat.filtered &lt;- countdata.filtered %&gt;% 
+  column_to_rownames(var = &quot;GeneID&quot;) %&gt;% 
+  as.matrix()
+
+
+head(countmat.filtered)</code></pre>
+<pre><code>##           wt_rep1 wt_rep2 gbpl.1_rep1 gbpl1.1_rep2 gbpl3.5_rep1 gbpl3.5_rep2 GBPL3.ox_rep1 GBPL3.ox_rep2
+## AT5G06520       0       0           2            1            2            2             1             1
+## AT1G50060       0       0           0            0            0            0             0             0
+## AT5G05200     754     908         819          468          963         1235           856          1046
+## AT4G18197      56      50          13            6           54           57            15            21
+## AT1G20820       0       0           0            0            0            0             0             0
+## AT5G66440      11      20          63           85           24           32            64            96</code></pre>
+<p>if all IDs would be present in the txdb object, then you’d simply do:</p>
+<pre class="r"><code>countmat &lt;- countdata %&gt;% 
+  column_to_rownames(var = &quot;GeneID&quot;) %&gt;% 
+  as.matrix()
+
+
+head(countmat)</code></pre>
+<pre><code>##           wt_rep1 wt_rep2 gbpl.1_rep1 gbpl1.1_rep2 gbpl3.5_rep1 gbpl3.5_rep2 GBPL3.ox_rep1 GBPL3.ox_rep2
+## AT5G06520       0       0           2            1            2            2             1             1
+## AT1G50060       0       0           0            0            0            0             0             0
+## AT5G05200     754     908         819          468          963         1235           856          1046
+## AT4G18197      56      50          13            6           54           57            15            21
+## AT1G20820       0       0           0            0            0            0             0             0
+## AT5G66440      11      20          63           85           24           32            64            96</code></pre>
+<div id="orgdb" class="section level5">
+<h5>OrgDb</h5>
+<p>the OrgDb package will be used to annotate the genes, later on! But the handling is sort of similar (or: it can be) to that of a txdb:</p>
+<pre class="r"><code>library(org.At.tair.db)</code></pre>
+<pre class="r"><code>ls(&quot;package:org.At.tair.db&quot;) </code></pre>
+<pre><code>##  [1] &quot;org.At.tair&quot;             &quot;org.At.tair.db&quot;          &quot;org.At.tair_dbconn&quot;      &quot;org.At.tair_dbfile&quot;     
+##  [5] &quot;org.At.tair_dbInfo&quot;      &quot;org.At.tair_dbschema&quot;    &quot;org.At.tairARACYC&quot;       &quot;org.At.tairARACYCENZYME&quot;
+##  [9] &quot;org.At.tairCHR&quot;          &quot;org.At.tairCHRLENGTHS&quot;   &quot;org.At.tairCHRLOC&quot;       &quot;org.At.tairCHRLOCEND&quot;   
+## [13] &quot;org.At.tairENTREZID&quot;     &quot;org.At.tairENZYME&quot;       &quot;org.At.tairENZYME2TAIR&quot;  &quot;org.At.tairGENENAME&quot;    
+## [17] &quot;org.At.tairGO&quot;           &quot;org.At.tairGO2ALLTAIRS&quot;  &quot;org.At.tairGO2TAIR&quot;      &quot;org.At.tairMAPCOUNTS&quot;   
+## [21] &quot;org.At.tairORGANISM&quot;     &quot;org.At.tairPATH&quot;         &quot;org.At.tairPATH2TAIR&quot;    &quot;org.At.tairPMID&quot;        
+## [25] &quot;org.At.tairPMID2TAIR&quot;    &quot;org.At.tairREFSEQ&quot;       &quot;org.At.tairREFSEQ2TAIR&quot;  &quot;org.At.tairSYMBOL&quot;</code></pre>
+<pre class="r"><code>columns(org.At.tair.db)</code></pre>
+<pre><code>##  [1] &quot;ARACYC&quot;       &quot;ARACYCENZYME&quot; &quot;ENTREZID&quot;     &quot;ENZYME&quot;       &quot;EVIDENCE&quot;     &quot;EVIDENCEALL&quot;  &quot;GENENAME&quot;    
+##  [8] &quot;GO&quot;           &quot;GOALL&quot;        &quot;ONTOLOGY&quot;     &quot;ONTOLOGYALL&quot;  &quot;PATH&quot;         &quot;PMID&quot;         &quot;REFSEQ&quot;      
+## [15] &quot;SYMBOL&quot;       &quot;TAIR&quot;</code></pre>
+<pre class="r"><code>keytypes(org.At.tair.db)</code></pre>
+<pre><code>##  [1] &quot;ARACYC&quot;       &quot;ARACYCENZYME&quot; &quot;ENTREZID&quot;     &quot;ENZYME&quot;       &quot;EVIDENCE&quot;     &quot;EVIDENCEALL&quot;  &quot;GENENAME&quot;    
+##  [8] &quot;GO&quot;           &quot;GOALL&quot;        &quot;ONTOLOGY&quot;     &quot;ONTOLOGYALL&quot;  &quot;PATH&quot;         &quot;PMID&quot;         &quot;REFSEQ&quot;      
+## [15] &quot;SYMBOL&quot;       &quot;TAIR&quot;</code></pre>
+<pre class="r"><code>head(keys(org.At.tair.db))</code></pre>
+<pre><code>## [1] &quot;AT1G01010&quot; &quot;AT1G01020&quot; &quot;AT1G01030&quot; &quot;AT1G01040&quot; &quot;AT1G01050&quot; &quot;AT1G01060&quot;</code></pre>
+<pre class="r"><code>head(keys(org.At.tair.db, keytype = &quot;GENENAME&quot;))</code></pre>
+<pre><code>## [1] &quot;Encodes a Dicer homolog. Dicer is a RNA helicase involved in microRNA processing. Mutations in this locus can result in embryo lethality. Embryo shape at seed maturity is globular-elongate. Other mutants convert the floral meristems to an indeterminate state, others yet show defects in ovule development. mRNA is expressed in all shoot tissues. DCL1 is able to produce miRNAs and siRNAs.&quot;
+## [2] &quot;Encodes a soluble protein with inorganic pyrophosphatase activity that is highly specific for Mg-inorganic pyrophosphate.&quot;                                                                                                                                                                                                                                                                           
+## [3] &quot;LHY encodes a myb-related putative transcription factor involved in circadian rhythm along with another myb transcription factor CCA1&quot;                                                                                                                                                                                                                                                               
+## [4] &quot;pyruvate dehydrogenase E1 alpha subunit&quot;                                                                                                                                                                                                                                                                                                                                                             
+## [5] &quot;Encodes a condensing enzyme KCS1 (3-ketoacyl-CoA synthase 1) which is involved in the critical fatty acid elongation process in wax biosynthesis.&quot;                                                                                                                                                                                                                                                   
+## [6] &quot;Encodes a CBL-interacting protein kinase with similarity to SOS2&quot;</code></pre>
+<pre class="r"><code>head(keys(org.At.tair.db, keytype = &quot;SYMBOL&quot;))</code></pre>
+<pre><code>## [1] &quot;ANAC001&quot; &quot;NAC001&quot;  &quot;NTL10&quot;   &quot;ARV1&quot;    &quot;NGA3&quot;    &quot;ASU1&quot;</code></pre>
+<pre class="r"><code>head(keys(org.At.tair.db, keytype = &quot;TAIR&quot;))</code></pre>
+<pre><code>## [1] &quot;AT1G01010&quot; &quot;AT1G01020&quot; &quot;AT1G01030&quot; &quot;AT1G01040&quot; &quot;AT1G01050&quot; &quot;AT1G01060&quot;</code></pre>
+<pre class="r"><code>### make life a little easier
+
+orgdb &lt;- org.At.tair.db
+orgdb</code></pre>
+<pre><code>## OrgDb object:
+## | DBSCHEMAVERSION: 2.1
+## | Db type: OrgDb
+## | Supporting package: AnnotationDbi
+## | DBSCHEMA: ARABIDOPSIS_DB
+## | ORGANISM: Arabidopsis thaliana
+## | SPECIES: Arabidopsis
+## | TAIRSOURCENAME: Tair
+## | TAIRSOURCEDATE: 2021-Apr15
+## | TAIRSOURCEURL: https://www.arabidopsis.org/
+## | TAIRGOURL: https://www.arabidopsis.org/download_files/GO_and_PO_Annotations/Gene_Ontology_Annotations/ATH_GO_GOSLIM.txt
+## | TAIRGENEURL: https://www.arabidopsis.org/download_files/Genes/TAIR10_genome_release/TAIR10_functional_descriptions
+## | TAIRSYMBOLURL: https://www.arabidopsis.org/download_files/Public_Data_Releases/TAIR_Data_20200331/gene_aliases_20200331.txt.gz
+## | TAIRPATHURL: ftp://ftp.plantcyc.org/Pathways/Data_dumps/PMN15_January2021/pathways/ara_pathways.20210325.txt
+## | TAIRPMIDURL: https://www.arabidopsis.org/download_files/Public_Data_Releases/TAIR_Data_20200331/Locus_Published_20200331.txt.gz
+## | TAIRCHRURL: https://www.arabidopsis.org/download_files/Maps/seqviewer_data/sv_gene.data
+## | TAIRATHURL: https://www.arabidopsis.org/download_files/Microarrays/Affymetrix/affy_ATH1_array_elements-2010-12-20.txt
+## | TAIRAGURL: https://www.arabidopsis.org/download_files/Microarrays/Affymetrix/affy_AG_array_elements-2010-12-20.txt
+## | CENTRALID: TAIR
+## | TAXID: 3702
+## | KEGGSOURCENAME: KEGG GENOME
+## | KEGGSOURCEURL: ftp://ftp.genome.jp/pub/kegg/genomes
+## | KEGGSOURCEDATE: 2011-Mar15
+## | GOSOURCENAME: Gene Ontology
+## | GOSOURCEURL: http://current.geneontology.org/ontology/go-basic.obo
+## | GOSOURCEDATE: 2021-02-01
+## | GOEGSOURCEDATE: 2021-Apr14
+## | GOEGSOURCENAME: Entrez Gene
+## | GOEGSOURCEURL: ftp://ftp.ncbi.nlm.nih.gov/gene/DATA
+## | EGSOURCEDATE: 2021-Apr14
+## | EGSOURCENAME: Entrez Gene
+## | EGSOURCEURL: ftp://ftp.ncbi.nlm.nih.gov/gene/DATA</code></pre>
+<pre><code>## 
+## Please see: help(&#39;select&#39;) for usage information</code></pre>
+<pre class="r"><code>class(orgdb)</code></pre>
+<pre><code>## [1] &quot;OrgDb&quot;
+## attr(,&quot;package&quot;)
+## [1] &quot;AnnotationDbi&quot;</code></pre>
+</div>
+</div>
+<div id="sampledata" class="section level4">
+<h4>Sampledata</h4>
+<p>The sampledata file is already imported, but again, there are many more columns and in this case also more rows than we need (or more rows than there will be samples in the analysis). Moreover, the values are not stored as factors, but they have to be, in order to make DEseq work.</p>
+<pre class="r"><code>head(sampledata)</code></pre>
+<pre><code>## # A tibble: 6 x 2
+##   ID           sample 
+##   &lt;chr&gt;        &lt;chr&gt;  
+## 1 wt_rep1      wt     
+## 2 wt_rep2      wt     
+## 3 gbpl.1_rep1  gbpl1.1
+## 4 gbpl1.1_rep2 gbpl1.1
+## 5 gbpl3.5_rep1 gbpl3.5
+## 6 gbpl3.5_rep2 gbpl3.5</code></pre>
+<p>So first, I throw out everything (from both rows as well as columns) that is not required to run the analysis.</p>
+<pre class="r"><code>sampledat &lt;- sampledata %&gt;% 
+  
+  # filter for required rows (=replicates). I can use the colnames of the countmat to filter by
+  filter(ID  %in%  colnames(countmat.filtered))
+
+
+sampledat</code></pre>
+<pre><code>## # A tibble: 8 x 2
+##   ID            sample  
+##   &lt;chr&gt;         &lt;chr&gt;   
+## 1 wt_rep1       wt      
+## 2 wt_rep2       wt      
+## 3 gbpl.1_rep1   gbpl1.1 
+## 4 gbpl1.1_rep2  gbpl1.1 
+## 5 gbpl3.5_rep1  gbpl3.5 
+## 6 gbpl3.5_rep2  gbpl3.5 
+## 7 GBPL3.ox_rep1 GBPL3.ox
+## 8 GBPL3.ox_rep2 GBPL3.ox</code></pre>
+<p>Next, I have to make factors out of the values in all three columns (so far, they are characters). And I sort the samples, so that the order of rows in the sampledat object matches the order of the corresponding columns in the countmat object.</p>
+<pre class="r"><code># store order of columns in countmatrix for sorting
+colorder &lt;- colnames(countmat.filtered)</code></pre>
+<pre class="r"><code># convert sampledat columns to factors
+
+sampledat$ID &lt;- as.factor(sampledat$ID) 
+sampledat$sample &lt;- as.factor(sampledat$sample)
+
+
+# check order of factor levels 
+
+levels(sampledat$ID) # not in order</code></pre>
+<pre><code>## [1] &quot;gbpl.1_rep1&quot;   &quot;gbpl1.1_rep2&quot;  &quot;gbpl3.5_rep1&quot;  &quot;gbpl3.5_rep2&quot;  &quot;GBPL3.ox_rep1&quot; &quot;GBPL3.ox_rep2&quot; &quot;wt_rep1&quot;      
+## [8] &quot;wt_rep2&quot;</code></pre>
+<pre class="r"><code>levels(sampledat$sample) # not in order</code></pre>
+<pre><code>## [1] &quot;gbpl1.1&quot;  &quot;gbpl3.5&quot;  &quot;GBPL3.ox&quot; &quot;wt&quot;</code></pre>
+<pre class="r"><code># make 20°C the reference level
+sampledat$ID %&lt;&gt;% relevel(&quot;wt_rep2&quot;)
+sampledat$ID %&lt;&gt;% relevel(&quot;wt_rep1&quot;)
+levels(sampledat$ID) # now it&#39;s fine. </code></pre>
+<pre><code>## [1] &quot;wt_rep1&quot;       &quot;wt_rep2&quot;       &quot;gbpl.1_rep1&quot;   &quot;gbpl1.1_rep2&quot;  &quot;gbpl3.5_rep1&quot;  &quot;gbpl3.5_rep2&quot;  &quot;GBPL3.ox_rep1&quot;
+## [8] &quot;GBPL3.ox_rep2&quot;</code></pre>
+<pre class="r"><code># 2-step reordering of levels of Genotemp to get SEN20-&gt;SEN0-&gt;TOL20-&gt;TOL0
+sampledat$sample %&lt;&gt;% relevel(&quot;wt&quot;)
+levels(sampledat$sample) # now it&#39;s fine. </code></pre>
+<pre><code>## [1] &quot;wt&quot;       &quot;gbpl1.1&quot;  &quot;gbpl3.5&quot;  &quot;GBPL3.ox&quot;</code></pre>
+<pre class="r"><code># adjust order of factorlevels for ID column to match with colorder in countmatrix
+sampledat$ID &lt;- reorder.factor(sampledat$ID, new.order=colorder)
+sampledat &lt;- sampledat %&gt;% arrange(ID)</code></pre>
+<pre class="r"><code>### whoops... one last thing. I almost forgot to use the ID as rownames 
+sampledat &lt;- column_to_rownames(sampledat, var = &quot;ID&quot;)
+sampledat</code></pre>
+<pre><code>##                 sample
+## wt_rep1             wt
+## wt_rep2             wt
+## gbpl.1_rep1    gbpl1.1
+## gbpl1.1_rep2   gbpl1.1
+## gbpl3.5_rep1   gbpl3.5
+## gbpl3.5_rep2   gbpl3.5
+## GBPL3.ox_rep1 GBPL3.ox
+## GBPL3.ox_rep2 GBPL3.ox</code></pre>
+<pre class="r"><code># The rownames, in fact, have to match the column names of countdat. Sanity check:
+all(rownames(sampledat) == colnames(countmat.filtered))</code></pre>
+<pre><code>## [1] TRUE</code></pre>
+</div>
+<div id="designformula---the-secret-ingredient" class="section level4">
+<h4>Designformula - the secret ingredient</h4>
+<p>When creating the DESeq dataset, we need to specify the “design”.</p>
+<p>So far, the - in my opinion - best explanation (incl. examples) I came across is included <a href="https://hbctraining.github.io/DGE_workshop/lessons/04_DGE_DESeq2_analysis.html">here</a>.</p>
+<p><a href="https://bioc.ism.ac.jp/packages/2.14/bioc/vignettes/DESeq2/inst/doc/beginner.pdf">This vignette</a> gives a pretty basic explanation on how it is used and what it means with some examples that I modified in the text to match the analysis we run here:</p>
+<p><em>“[…] the DESeqDataSet has an associated ‘design formula’. The design is specified at the beginning of the analysis, as this will inform many of theDESeq2 functions how to treat the samples in the analysis (one exception is the size factor estimation – adjustment for differing library sizes – which does not depend on the design formula). The design formula tells which variablesin the column metadata table (coldata aka sampledat) specify the experimental design and how these factors should be used in the analysis.The simplest design formula for differential expression would be ∼condition [or in our case, something like "genotemp"], where condition is a column in colData(dds) which specifies which of two (or more) groups the samples belong to.”</em></p>
+<p>We want to examine the ‘general’ temperature response. As trivial as it sounds, there are several ways to approach this (to be precise, there are at least three… and these three can again vary depending on how different parameters are specified, respectively.). I know this is a truely girly stereotype, but coming back to the cake metaphor: it’s as if we have decided to bake a sponge cake and even though the ingredients basically the same, there are several ways to mix them together, which can slightly affect the outcome … e.g. the texture or whatever.</p>
+<p>Since we want to investigate how gene expression differs between the mutant and the wt, the design is pretty straight forward (“~sample”)</p>
+<ol start="5" style="list-style-type: decimal">
+<li><p>…</p></li>
+<li><p>…</p></li>
+</ol>
+</div>
+<div id="creating-the-deseqdatasets" class="section level4">
+<h4>Creating the DESeqDataset(s)</h4>
+<p>For now, we are now ready to create the DESeqDataSet, using the ingredients that we just prepared.</p>
+<pre class="r"><code>contrast_gbpl1 &lt;- c(&quot;sample&quot;, &quot;gbpl1.1&quot;,  &quot;wt&quot;)
+contrast_gbpl3 &lt;- c(&quot;sample&quot;, &quot;gbpl3.5&quot;,  &quot;wt&quot;)
+contrast_oex &lt;- c(&quot;sample&quot;, &quot;GBPL3.ox&quot;,  &quot;wt&quot;)</code></pre>
+<pre class="r"><code># approach 1: pairwise comparison of gbpb and wt (factor)
+
+dds &lt;- DESeq2::DESeqDataSetFromMatrix(countmat.filtered, colData = sampledat, design = ~ sample)</code></pre>
+<pre class="r"><code>rowRanges(dds) &lt;- ebg.filtered</code></pre>
+</div>
+</div>
+<div id="analysis-of-differential-expression" class="section level3">
+<h3>Analysis of differential expression</h3>
+<div id="pre-filtering-vs.-no-pre-filtering-of-zero-count-genes" class="section level4">
+<h4>pre-filtering vs. no pre-filtering of zero-count genes</h4>
+<p><a href="https://www.bioconductor.org/packages/devel/bioc/vignettes/DESeq2/inst/doc/DESeq2.html">The DESeq2 vignette</a> says the following about pre-filtering:</p>
+<p><em>While it is not necessary to pre-filter low count genes before running the DESeq2 functions, there are two reasons which make pre-filtering useful: by removing rows in which there are no reads or nearly no reads, we reduce the memory size of the dds data object and we increase the speed of the transformation and testing functions within DESeq2. Here we perform a minimal pre-filtering to remove rows that have only 0 or 1 read. Note that more strict filtering to increase power is automatically applied via independent filtering on the mean of normalized counts within the results function, […]</em></p>
+<pre class="r"><code>keep &lt;- rowSums(counts(dds)) &gt; 1
+dds &lt;- dds[keep,]
+nrow(dds)</code></pre>
+<pre><code>## [1] 21558</code></pre>
+</div>
+<div id="one-line-to-rule-them-all---the-deseq-function" class="section level4">
+<h4>One line to rule them all - the DESeq function</h4>
+<p>Next, we will run DESeq on each dds object, which runs several steps in the background that we ignore for now. Mostly, the default settings will do what I want.</p>
+<pre class="r"><code>dds &lt;- DESeq2::DESeq(dds)</code></pre>
+<pre><code>## estimating size factors</code></pre>
+<pre><code>## estimating dispersions</code></pre>
+<pre><code>## gene-wise dispersion estimates</code></pre>
+<pre><code>## mean-dispersion relationship</code></pre>
+<pre><code>## final dispersion estimates</code></pre>
+<pre><code>## fitting model and testing</code></pre>
+</div>
+<div id="extracting-and-saving-normalized-counts" class="section level4">
+<h4>Extracting and saving normalized counts</h4>
+<p>After running <code>DESeq()</code>, we can now extract the results from the dds objects. And we can also extract the normalized counts and save them to a file. This is what I do first, because irrespective of how we extract the results and which parameters we adjust for the results (statistical tests, padj etc.) - the normalized counts should not change from here on.</p>
+<pre class="r"><code># extract normalized counts
+
+normcounts &lt;- counts(dds, normalized = TRUE)
+fpkm &lt;- fpkm(dds)</code></pre>
+<pre class="r"><code># # write norm counts to file
+# 
+# # dir.create(&quot;./output&quot;)
+# write.table(normcounts, file = paste0(&quot;./output/&quot;, Sys.Date(), &quot;_normcounts.txt&quot;, sep = &quot;&quot;), sep = &quot;\t&quot;)
+# write.table(fpkm, file = paste0(&quot;./output/&quot;, Sys.Date(), &quot;_fpkm.txt&quot;, sep = &quot;&quot;), sep = &quot;\t&quot;)</code></pre>
+</div>
+<div id="extracting-and-saving-results" class="section level4">
+<h4>Extracting and saving results</h4>
+<p>To get the results of the DESeq analysis for each dds, we only have to run <code>results()</code> on the dds object and save the results to a new object. If we wouldn’t want anything else, we would be done at this point.</p>
+<p>However, in our case, the following section will become another branching point:</p>
+<p>When there is more than one comparison defined by the design formula, by default, DESEq gives only the comparison of the last level of the factor vs. the reference level. If we want to extract the results for a specific comparison other than that, we have to specify this using the contrast argument. This, specifically, applies to dds1, where I want to extract the results for the comparison of TOL0_vs_TOL20, as well as that for SEN0_vs_SEN20. To get this, I have to provide the comparison I want using the contrast argument, which follows the pattern <code>c("factor", "testlevel", "reflevel")</code>. So for TOL0_vs_TOL20 this corresponds to: <code>c("genotemp", "TOL0", "TOL20")</code>.</p>
+<p>The <code>results</code> function is also the place to specify how p-values should be adjusted and where we later want to set the cut for the alpha-level. By default, <code>alpha = 0.1</code>, which I will change to <code>alpha = 0.05</code> everywhere. For adjustment of p-values, I want to try different methods: * “bonferroni”: although, <code>?p.adjust</code> in R says “There seems no reason to use the unmodified Bonferroni correction because it is dominated by Holm’s method, which is also valid under arbitrary assumptions.”, I will use Bonferroni correction to be able to compare the output to the results we obtained when we used FeatureCounts after deduplication. * “holm”: I initially did not plan to include ‘holm’, but as it seems to be preferred over (but still similar to) bonferroni, I decided to include it, as well. * “BH”: the Benjamini&amp;Hochberg method is the default and will be included, too. * “IHW”: stands for “independent Hypothesis weighting”. It comes with it’s own package (which is already loaded), and is not accessible via the <code>pAdjustMethod</code> argument. The <a href="https://bioconductor.org/packages/release/bioc/vignettes/IHW/inst/doc/introduction_to_ihw.html#fwer-control-with-ihw">IHW vignette</a> describes that in can operate in two modes: <em>“The standard IHW method […] controls the FDR by using a weighted Benjamini-Hochberg procedure with data-driven weights. The same principle can be applied for FWER control by using a weighted Bonferroni procedure. Everything works exactly [the same], just use the argument adjustment_type..”</em></p>
+<p>Naming conventions for results objects: * “res” will be the base name for all results objects, followed by the digit, which refers to the corresponding dds object (i.e. res1 for all results extracted from dds1) * the pAdjustMethod (or filterFun) is indicated, using the following abbreviations: + bonf = “bonferroni” + holm = “holm” + bh = “BH” + ihw.bh = “IHW” (FDR control) + ihw.fwer = “IHW” (FWER [= Bonferroni] control) * this is followed by “.05” to indicate alpha * when more than one comparison is extracted with otherwise identical settings, the comparison is indicated at the end of the name.</p>
+<p>First I run “bh”, “bonferroni”, and “holm” for ‘res1…’ objects, then for ‘res2…’ and ‘res3…’. The combinations different parameters increases the number of elements we have to carry along quite drastically (just a warning).</p>
+<p>IHW will be performed below. There, the code looks slightly different.</p>
+<p>** update 2020-11-11: dds4 is again included. Further analyses for the method we use for dds4 are separate from dds1, dds2 and dds3. They will be dealt with in <strong>an extra section (“Analyses and Results for dds4”)</strong>.</p>
+<pre class="r"><code># results for dds
+
+res &lt;- DESeq2::results(dds)
+res_gbpl1 &lt;- DESeq2::results(dds, contrast = contrast_gbpl1)
+res_gbpl3 &lt;- DESeq2::results(dds, contrast = contrast_gbpl3)
+res_oex &lt;- DESeq2::results(dds, contrast = contrast_oex)
+
+head(res)</code></pre>
+<pre><code>## log2 fold change (MLE): sample GBPL3.ox vs wt 
+## Wald test p-value: sample GBPL3.ox vs wt 
+## DataFrame with 6 rows and 6 columns
+##            baseMean log2FoldChange     lfcSE      stat      pvalue        padj
+##           &lt;numeric&gt;      &lt;numeric&gt; &lt;numeric&gt; &lt;numeric&gt;   &lt;numeric&gt;   &lt;numeric&gt;
+## AT1G01010   1.04977       1.407082  2.563405  0.548911 5.83066e-01 6.61706e-01
+## AT1G01030 885.21994      -0.843383  0.162971 -5.175064 2.27833e-07 7.27003e-07
+## AT1G01040  38.11439      -2.604603  0.444922 -5.854070 4.79686e-09 1.74920e-08
+## AT1G01050  45.00786       1.327389  0.464576  2.857206 4.27388e-03 8.36969e-03
+## AT1G01070  34.92297      -0.754604  0.438263 -1.721806 8.51047e-02 1.28895e-01
+## AT1G01090  30.22869      -5.266811  0.774476 -6.800483 1.04269e-11 4.55384e-11</code></pre>
+<pre class="r"><code>head(res_gbpl1)</code></pre>
+<pre><code>## log2 fold change (MLE): sample gbpl1.1 vs wt 
+## Wald test p-value: sample gbpl1.1 vs wt 
+## DataFrame with 6 rows and 6 columns
+##            baseMean log2FoldChange     lfcSE      stat      pvalue        padj
+##           &lt;numeric&gt;      &lt;numeric&gt; &lt;numeric&gt; &lt;numeric&gt;   &lt;numeric&gt;   &lt;numeric&gt;
+## AT1G01010   1.04977       2.505626  2.500454   1.00207 3.16311e-01 4.04712e-01
+## AT1G01030 885.21994      -0.880990  0.164751  -5.34740 8.92276e-08 3.00893e-07
+## AT1G01040  38.11439      -2.993147  0.501778  -5.96509 2.44505e-09 9.27582e-09
+## AT1G01050  45.00786       1.833331  0.465266   3.94039 8.13493e-05 2.05975e-04
+## AT1G01070  34.92297      -0.747758  0.452945  -1.65088 9.87629e-02 1.49024e-01
+## AT1G01090  30.22869      -4.753120  0.781535  -6.08177 1.18860e-09 4.60736e-09</code></pre>
+<pre class="r"><code>head(res_gbpl3)</code></pre>
+<pre><code>## log2 fold change (MLE): sample gbpl3.5 vs wt 
+## Wald test p-value: sample gbpl3.5 vs wt 
+## DataFrame with 6 rows and 6 columns
+##            baseMean log2FoldChange     lfcSE       stat    pvalue      padj
+##           &lt;numeric&gt;      &lt;numeric&gt; &lt;numeric&gt;  &lt;numeric&gt; &lt;numeric&gt; &lt;numeric&gt;
+## AT1G01010   1.04977      3.0376493  2.459821  1.2349069  0.216865         1
+## AT1G01030 885.21994     -0.0111818  0.162531 -0.0687979  0.945150         1
+## AT1G01040  38.11439     -0.3444768  0.398287 -0.8648948  0.387097         1
+## AT1G01050  45.00786      0.4428668  0.490079  0.9036639  0.366174         1
+## AT1G01070  34.92297      0.0815159  0.434048  0.1878037  0.851031         1
+## AT1G01090  30.22869     -0.3479840  0.456930 -0.7615695  0.446317         1</code></pre>
+<pre class="r"><code>head(res_oex)</code></pre>
+<pre><code>## log2 fold change (MLE): sample GBPL3.ox vs wt 
+## Wald test p-value: sample GBPL3.ox vs wt 
+## DataFrame with 6 rows and 6 columns
+##            baseMean log2FoldChange     lfcSE      stat      pvalue        padj
+##           &lt;numeric&gt;      &lt;numeric&gt; &lt;numeric&gt; &lt;numeric&gt;   &lt;numeric&gt;   &lt;numeric&gt;
+## AT1G01010   1.04977       1.407082  2.563405  0.548911 5.83066e-01 6.61706e-01
+## AT1G01030 885.21994      -0.843383  0.162971 -5.175064 2.27833e-07 7.27003e-07
+## AT1G01040  38.11439      -2.604603  0.444922 -5.854070 4.79686e-09 1.74920e-08
+## AT1G01050  45.00786       1.327389  0.464576  2.857206 4.27388e-03 8.36969e-03
+## AT1G01070  34.92297      -0.754604  0.438263 -1.721806 8.51047e-02 1.28895e-01
+## AT1G01090  30.22869      -5.266811  0.774476 -6.800483 1.04269e-11 4.55384e-11</code></pre>
+<p>With this, we are done calculating the “regular” statistics, without LFC shrinkage, which comes up next. Before I go on, we can export the results we just pulled out of the dds objects. For this, I order the results from lowest to highest padj values (optional), and create data.frame equivalents of each res object (mandatory - otherwise export doesn’t work), which I export to a .txt file. In order to process all result objects in one go, I put all of the (deseq)res objects in a list and loop through that list.</p>
+<p>The results carrying an “ihw.fwer” or “ihw.bh” suffix are treated slightly different, as they belong to another class (ihwResult vs. DESeqResults).</p>
+<pre class="r"><code>resdf &lt;- res[order(res$padj),]       # order element res by padj
+ 
+ resdf &lt;- as.data.frame(resdf)        # convert ordered element to df
+     
+ head(resdf)</code></pre>
+<pre><code>##            baseMean log2FoldChange     lfcSE      stat pvalue padj
+## AT1G08140 12111.526      -6.912596 0.1734449 -39.85470      0    0
+## AT1G34150 11028.074       6.199138 0.1624543  38.15927      0    0
+## AT2G14288 17172.924      -6.029601 0.1468515 -41.05915      0    0
+## AT3G13222  3597.868      -7.367141 0.1881642 -39.15272      0    0
+## AT3G27030  9061.655       7.606444 0.1830588  41.55192      0    0
+## AT3G57270  8402.975       7.204313 0.1859897  38.73500      0    0</code></pre>
+<pre class="r"><code># 
+# # write the df to a table under ./output/ use the date and the name of the df as file name.
+#   
+# write.table(resdf, file = paste0(&quot;./output/&quot;, Sys.Date(), &quot;_res-dds.txt&quot;, sep = &quot;&quot;), sep = &quot;\t&quot;)
+#                                             </code></pre>
+</div>
+<div id="annotate" class="section level4">
+<h4>Annotate</h4>
+<div id="txdb-1" class="section level5">
+<h5>TxDb</h5>
+<p>Gene info should be accessible from the TxDb package. Let’s see what the Arabidopsis TxDb Package contains…</p>
+<pre class="r"><code>### Leave commented if it&#39;s already installed!
+
+# if (!requireNamespace(&quot;BiocManager&quot;, quietly = TRUE))
+#     install.packages(&quot;BiocManager&quot;)
+# 
+# BiocManager::install(&quot;TxDb.Athaliana.BioMart.plantsmart28&quot;)</code></pre>
+<pre class="r"><code>library(TxDb.Athaliana.BioMart.plantsmart28)</code></pre>
+<pre class="r"><code>ls(&quot;package:TxDb.Athaliana.BioMart.plantsmart28&quot;) </code></pre>
+<pre><code>## [1] &quot;TxDb.Athaliana.BioMart.plantsmart28&quot;</code></pre>
+<pre class="r"><code>columns(TxDb.Athaliana.BioMart.plantsmart28)</code></pre>
+<pre><code>##  [1] &quot;CDSCHROM&quot;   &quot;CDSEND&quot;     &quot;CDSID&quot;      &quot;CDSNAME&quot;    &quot;CDSSTART&quot;   &quot;CDSSTRAND&quot;  &quot;EXONCHROM&quot;  &quot;EXONEND&quot;    &quot;EXONID&quot;    
+## [10] &quot;EXONNAME&quot;   &quot;EXONRANK&quot;   &quot;EXONSTART&quot;  &quot;EXONSTRAND&quot; &quot;GENEID&quot;     &quot;TXCHROM&quot;    &quot;TXEND&quot;      &quot;TXID&quot;       &quot;TXNAME&quot;    
+## [19] &quot;TXSTART&quot;    &quot;TXSTRAND&quot;   &quot;TXTYPE&quot;</code></pre>
+<pre class="r"><code>keytypes(TxDb.Athaliana.BioMart.plantsmart28)</code></pre>
+<pre><code>## [1] &quot;CDSID&quot;    &quot;CDSNAME&quot;  &quot;EXONID&quot;   &quot;EXONNAME&quot; &quot;GENEID&quot;   &quot;TXID&quot;     &quot;TXNAME&quot;</code></pre>
+<pre class="r"><code>head(keys(TxDb.Athaliana.BioMart.plantsmart28))</code></pre>
+<pre><code>## [1] &quot;AT1G01010&quot; &quot;AT1G01020&quot; &quot;AT1G01030&quot; &quot;AT1G01040&quot; &quot;AT1G01046&quot; &quot;AT1G01050&quot;</code></pre>
+<pre class="r"><code>head(keys(TxDb.Athaliana.BioMart.plantsmart28, keytype = &quot;GENEID&quot;))</code></pre>
+<pre><code>## [1] &quot;AT1G01010&quot; &quot;AT1G01020&quot; &quot;AT1G01030&quot; &quot;AT1G01040&quot; &quot;AT1G01046&quot; &quot;AT1G01050&quot;</code></pre>
+<pre class="r"><code>### make life a little easier
+
+txdb &lt;- TxDb.Athaliana.BioMart.plantsmart28
+txdb</code></pre>
+<pre><code>## TxDb object:
+## # Db type: TxDb
+## # Supporting package: GenomicFeatures
+## # Data source: BioMart
+## # Organism: Arabidopsis thaliana
+## # Taxonomy ID: 3702
+## # Resource URL: www.biomart.org:80
+## # BioMart database: plants_mart_28
+## # BioMart database version: ENSEMBL PLANTS 28 (EBI UK)
+## # BioMart dataset: athaliana_eg_gene
+## # BioMart dataset description: Arabidopsis thaliana genes (TAIR10 (2010-09-TAIR10))
+## # BioMart dataset version: TAIR10 (2010-09-TAIR10)
+## # Full dataset: yes
+## # miRBase build ID: NA
+## # transcript_nrow: 41671
+## # exon_nrow: 171013
+## # cds_nrow: 147494
+## # Db created by: GenomicFeatures package from Bioconductor
+## # Creation time: 2015-10-07 18:17:11 +0000 (Wed, 07 Oct 2015)
+## # GenomicFeatures version at creation time: 1.21.30
+## # RSQLite version at creation time: 1.0.0
+## # DBSCHEMAVERSION: 1.1</code></pre>
+<pre class="r"><code>class(txdb)</code></pre>
+<pre><code>## [1] &quot;TxDb&quot;
+## attr(,&quot;package&quot;)
+## [1] &quot;GenomicFeatures&quot;</code></pre>
+</div>
+<div id="orgdb-1" class="section level5">
+<h5>OrgDb</h5>
+<pre class="r"><code>library(org.At.tair.db)</code></pre>
+<pre class="r"><code>ls(&quot;package:org.At.tair.db&quot;) </code></pre>
+<pre><code>##  [1] &quot;org.At.tair&quot;             &quot;org.At.tair.db&quot;          &quot;org.At.tair_dbconn&quot;      &quot;org.At.tair_dbfile&quot;     
+##  [5] &quot;org.At.tair_dbInfo&quot;      &quot;org.At.tair_dbschema&quot;    &quot;org.At.tairARACYC&quot;       &quot;org.At.tairARACYCENZYME&quot;
+##  [9] &quot;org.At.tairCHR&quot;          &quot;org.At.tairCHRLENGTHS&quot;   &quot;org.At.tairCHRLOC&quot;       &quot;org.At.tairCHRLOCEND&quot;   
+## [13] &quot;org.At.tairENTREZID&quot;     &quot;org.At.tairENZYME&quot;       &quot;org.At.tairENZYME2TAIR&quot;  &quot;org.At.tairGENENAME&quot;    
+## [17] &quot;org.At.tairGO&quot;           &quot;org.At.tairGO2ALLTAIRS&quot;  &quot;org.At.tairGO2TAIR&quot;      &quot;org.At.tairMAPCOUNTS&quot;   
+## [21] &quot;org.At.tairORGANISM&quot;     &quot;org.At.tairPATH&quot;         &quot;org.At.tairPATH2TAIR&quot;    &quot;org.At.tairPMID&quot;        
+## [25] &quot;org.At.tairPMID2TAIR&quot;    &quot;org.At.tairREFSEQ&quot;       &quot;org.At.tairREFSEQ2TAIR&quot;  &quot;org.At.tairSYMBOL&quot;</code></pre>
+<pre class="r"><code>columns(org.At.tair.db)</code></pre>
+<pre><code>##  [1] &quot;ARACYC&quot;       &quot;ARACYCENZYME&quot; &quot;ENTREZID&quot;     &quot;ENZYME&quot;       &quot;EVIDENCE&quot;     &quot;EVIDENCEALL&quot;  &quot;GENENAME&quot;    
+##  [8] &quot;GO&quot;           &quot;GOALL&quot;        &quot;ONTOLOGY&quot;     &quot;ONTOLOGYALL&quot;  &quot;PATH&quot;         &quot;PMID&quot;         &quot;REFSEQ&quot;      
+## [15] &quot;SYMBOL&quot;       &quot;TAIR&quot;</code></pre>
+<pre class="r"><code>keytypes(org.At.tair.db)</code></pre>
+<pre><code>##  [1] &quot;ARACYC&quot;       &quot;ARACYCENZYME&quot; &quot;ENTREZID&quot;     &quot;ENZYME&quot;       &quot;EVIDENCE&quot;     &quot;EVIDENCEALL&quot;  &quot;GENENAME&quot;    
+##  [8] &quot;GO&quot;           &quot;GOALL&quot;        &quot;ONTOLOGY&quot;     &quot;ONTOLOGYALL&quot;  &quot;PATH&quot;         &quot;PMID&quot;         &quot;REFSEQ&quot;      
+## [15] &quot;SYMBOL&quot;       &quot;TAIR&quot;</code></pre>
+<pre class="r"><code>head(keys(org.At.tair.db))</code></pre>
+<pre><code>## [1] &quot;AT1G01010&quot; &quot;AT1G01020&quot; &quot;AT1G01030&quot; &quot;AT1G01040&quot; &quot;AT1G01050&quot; &quot;AT1G01060&quot;</code></pre>
+<pre class="r"><code>head(keys(org.At.tair.db, keytype = &quot;GENENAME&quot;))</code></pre>
+<pre><code>## [1] &quot;Encodes a Dicer homolog. Dicer is a RNA helicase involved in microRNA processing. Mutations in this locus can result in embryo lethality. Embryo shape at seed maturity is globular-elongate. Other mutants convert the floral meristems to an indeterminate state, others yet show defects in ovule development. mRNA is expressed in all shoot tissues. DCL1 is able to produce miRNAs and siRNAs.&quot;
+## [2] &quot;Encodes a soluble protein with inorganic pyrophosphatase activity that is highly specific for Mg-inorganic pyrophosphate.&quot;                                                                                                                                                                                                                                                                           
+## [3] &quot;LHY encodes a myb-related putative transcription factor involved in circadian rhythm along with another myb transcription factor CCA1&quot;                                                                                                                                                                                                                                                               
+## [4] &quot;pyruvate dehydrogenase E1 alpha subunit&quot;                                                                                                                                                                                                                                                                                                                                                             
+## [5] &quot;Encodes a condensing enzyme KCS1 (3-ketoacyl-CoA synthase 1) which is involved in the critical fatty acid elongation process in wax biosynthesis.&quot;                                                                                                                                                                                                                                                   
+## [6] &quot;Encodes a CBL-interacting protein kinase with similarity to SOS2&quot;</code></pre>
+<pre class="r"><code>head(keys(org.At.tair.db, keytype = &quot;SYMBOL&quot;))</code></pre>
+<pre><code>## [1] &quot;ANAC001&quot; &quot;NAC001&quot;  &quot;NTL10&quot;   &quot;ARV1&quot;    &quot;NGA3&quot;    &quot;ASU1&quot;</code></pre>
+<pre class="r"><code>head(keys(org.At.tair.db, keytype = &quot;TAIR&quot;))</code></pre>
+<pre><code>## [1] &quot;AT1G01010&quot; &quot;AT1G01020&quot; &quot;AT1G01030&quot; &quot;AT1G01040&quot; &quot;AT1G01050&quot; &quot;AT1G01060&quot;</code></pre>
+<pre class="r"><code>### make life a little easier
+
+orgdb &lt;- org.At.tair.db
+orgdb</code></pre>
+<pre><code>## OrgDb object:
+## | DBSCHEMAVERSION: 2.1
+## | Db type: OrgDb
+## | Supporting package: AnnotationDbi
+## | DBSCHEMA: ARABIDOPSIS_DB
+## | ORGANISM: Arabidopsis thaliana
+## | SPECIES: Arabidopsis
+## | TAIRSOURCENAME: Tair
+## | TAIRSOURCEDATE: 2021-Apr15
+## | TAIRSOURCEURL: https://www.arabidopsis.org/
+## | TAIRGOURL: https://www.arabidopsis.org/download_files/GO_and_PO_Annotations/Gene_Ontology_Annotations/ATH_GO_GOSLIM.txt
+## | TAIRGENEURL: https://www.arabidopsis.org/download_files/Genes/TAIR10_genome_release/TAIR10_functional_descriptions
+## | TAIRSYMBOLURL: https://www.arabidopsis.org/download_files/Public_Data_Releases/TAIR_Data_20200331/gene_aliases_20200331.txt.gz
+## | TAIRPATHURL: ftp://ftp.plantcyc.org/Pathways/Data_dumps/PMN15_January2021/pathways/ara_pathways.20210325.txt
+## | TAIRPMIDURL: https://www.arabidopsis.org/download_files/Public_Data_Releases/TAIR_Data_20200331/Locus_Published_20200331.txt.gz
+## | TAIRCHRURL: https://www.arabidopsis.org/download_files/Maps/seqviewer_data/sv_gene.data
+## | TAIRATHURL: https://www.arabidopsis.org/download_files/Microarrays/Affymetrix/affy_ATH1_array_elements-2010-12-20.txt
+## | TAIRAGURL: https://www.arabidopsis.org/download_files/Microarrays/Affymetrix/affy_AG_array_elements-2010-12-20.txt
+## | CENTRALID: TAIR
+## | TAXID: 3702
+## | KEGGSOURCENAME: KEGG GENOME
+## | KEGGSOURCEURL: ftp://ftp.genome.jp/pub/kegg/genomes
+## | KEGGSOURCEDATE: 2011-Mar15
+## | GOSOURCENAME: Gene Ontology
+## | GOSOURCEURL: http://current.geneontology.org/ontology/go-basic.obo
+## | GOSOURCEDATE: 2021-02-01
+## | GOEGSOURCEDATE: 2021-Apr14
+## | GOEGSOURCENAME: Entrez Gene
+## | GOEGSOURCEURL: ftp://ftp.ncbi.nlm.nih.gov/gene/DATA
+## | EGSOURCEDATE: 2021-Apr14
+## | EGSOURCENAME: Entrez Gene
+## | EGSOURCEURL: ftp://ftp.ncbi.nlm.nih.gov/gene/DATA</code></pre>
+<pre><code>## 
+## Please see: help(&#39;select&#39;) for usage information</code></pre>
+<pre class="r"><code>class(orgdb)</code></pre>
+<pre><code>## [1] &quot;OrgDb&quot;
+## attr(,&quot;package&quot;)
+## [1] &quot;AnnotationDbi&quot;</code></pre>
+<pre class="r"><code>reslist &lt;- list(&quot;res_gbpl1&quot; = res_gbpl1, 
+                &quot;res_gbpl3&quot; = res_gbpl3, 
+                &quot;res_oex&quot; = res_oex)</code></pre>
+</div>
+<div id="creating-a-df-to-map-gene-descriptiona-and-symbols-to-atg-type-geneids" class="section level5">
+<h5>Creating a df to map gene descriptiona and symbols to “AT#G#####”-type geneIDs</h5>
+<pre class="r"><code>for (i in seq_along(reslist)){
+  
+  geneID &lt;- rownames(reslist[[i]])
+  
+  reslist[[i]]$symbol &lt;- mapIds(org.At.tair.db,     # object to extract data from
+                                keys = geneID,      # geneIDs just extracted from the `res` object see function -1) 
+                                column = &quot;SYMBOL&quot;,  # entrys from that column are extracted 
+                                keytype  =&quot;TAIR&quot;,   # to values from *which column* do the ´keys´ provided above correspond?
+                                multiVals=&quot;first&quot;   # how to handle one-to-many assignments (here: only map first)
+                                )
+
+
+## adding GENENAME (= descriptions) to the geneID-backbone (-keys)
+## aka:repeat above command, but this time extract values from the &quot;GENENAME&quot; column 
+## (and store them in a column of anno.df termed &quot;description&quot;)
+  
+  reslist[[i]]$description &lt;- mapIds(org.At.tair.db,   
+                                     keys = geneID,    
+                                     column = &quot;GENENAME&quot;, # entrys from that column are extracted 
+                                     keytype  =&quot;TAIR&quot;,  
+                                     multiVals=&quot;first&quot;)
+  
+}</code></pre>
+<pre><code>## &#39;select()&#39; returned 1:many mapping between keys and columns
+## &#39;select()&#39; returned 1:many mapping between keys and columns
+## &#39;select()&#39; returned 1:many mapping between keys and columns
+## &#39;select()&#39; returned 1:many mapping between keys and columns
+## &#39;select()&#39; returned 1:many mapping between keys and columns
+## &#39;select()&#39; returned 1:many mapping between keys and columns</code></pre>
+<!-- For when there is only one `res` object -->
+<!-- ```{r resanno} -->
+<!-- # rownames of the 'res' object correspond to the GeneIDs (for which mapped reads were counted). They become the skeleton for the annotation dataframe ... -->
+<!-- geneID <- rownames(res) -->
+<!-- # ... and are about to become the "keys" to search for within `orgdb` -->
+<!-- ## adding gene symbols to the geneID(-keys) -->
+<!-- res$symbol <- mapIds(org.At.tair.db,     # object to extract data from -->
+<!--                      keys = geneID,      # geneIDs just extracted from the `res` object see function -1)  -->
+<!--                      column = "SYMBOL",  # entrys from that column are extracted  -->
+<!--                      keytype  ="TAIR",   # to values from *which column* do the ´keys´ provided above correspond? -->
+<!--                      multiVals="first"   # how to handle one-to-many assignments (here: only map first) -->
+<!--                      ) -->
+<!-- ## adding GENENAME (= descriptions) to the geneID-backbone (-keys) -->
+<!-- ## aka:repeat above command, but this time extract values from the "GENENAME" column  -->
+<!-- ## (and store them in a column of anno.df termed "description") -->
+<!-- res$description <- mapIds(org.At.tair.db,    -->
+<!--                           keys = geneID,     -->
+<!--                           column = "GENENAME", # entrys from that column are extracted  -->
+<!--                           keytype  ="TAIR",   -->
+<!--                           multiVals="first") -->
+<!-- ``` -->
+<pre class="r"><code>for (i in seq_along(reslist)){                 # START OF LOOP
+    
+    resdf &lt;- reslist[[i]][order(reslist[[i]]$padj),]      # order element i by padj
+    resdf &lt;- as.data.frame(resdf)                         # convert ordered element to df
+    
+    resname &lt;- names(reslist[i])                          # store name of list coponent
+  
+    
+    
+  # write the df to a table under ./output/ use the date and the name of the df as file name.
+  
+    # write.table(resdf, file = paste0(&quot;./output/&quot;, Sys.Date(), &quot;_&quot;, resname, &quot;.txt&quot;, sep = &quot;&quot;), sep = &quot;\t&quot;)
+                                            
+}                                             # END OF LOOP</code></pre>
+<!-- ```{r resannotated} -->
+<!-- res.anno.df <- res[order(res$padj),] -->
+<!-- res.anno.df <- as.data.frame(res.anno.df) -->
+<!-- head(res.anno.df) -->
+<!-- write.table(res.anno.df, file = paste0("./output/", Sys.Date(), "_res-dds-annotated.txt", sep = ""), sep = "\t") -->
+<!-- ``` -->
+</div>
+</div>
+<div id="in-a-nutshell---looking-at-summaries" class="section level4">
+<h4>In a Nutshell - looking at summaries</h4>
+<p>To get a glimpse on the results we just extracted, we can use <code>summary</code>. Again, this would be a little bit much to type for all 3 individual objects , so I try to construct a loop, which first filters for genes with a log2FoldChange of &gt; |1| and a padj &lt; 0.05. Because although we specified alpha already, this did not throw out genes with a higher padj, instead it</p>
+<pre class="r"><code># print summary of each element in the results-list if the object is a DESeqResultsobject
+
+for (i in seq_along(reslist)){
+  
+  print(names(reslist[i]))
+  summary(reslist[[i]])
+  print(sum(((reslist[[i]]$padj &lt; 0.05) &amp; ((reslist[[i]]$log2FoldChange &gt;= 1) | (reslist[[i]]$log2FoldChange &lt;= -1))), na.rm=TRUE))
+  
+  }</code></pre>
+<pre><code>## [1] &quot;res_gbpl1&quot;
+## 
+## out of 21558 with nonzero total read count
+## adjusted p-value &lt; 0.1
+## LFC &gt; 0 (up)       : 6415, 30%
+## LFC &lt; 0 (down)     : 6416, 30%
+## outliers [1]       : 0, 0%
+## low counts [2]     : 1254, 5.8%
+## (mean count &lt; 1)
+## [1] see &#39;cooksCutoff&#39; argument of ?results
+## [2] see &#39;independentFiltering&#39; argument of ?results
+## 
+## [1] 9407
+## [1] &quot;res_gbpl3&quot;
+## 
+## out of 21558 with nonzero total read count
+## adjusted p-value &lt; 0.1
+## LFC &gt; 0 (up)       : 7, 0.032%
+## LFC &lt; 0 (down)     : 12, 0.056%
+## outliers [1]       : 0, 0%
+## low counts [2]     : 0, 0%
+## (mean count &lt; 0)
+## [1] see &#39;cooksCutoff&#39; argument of ?results
+## [2] see &#39;independentFiltering&#39; argument of ?results
+## 
+## [1] 9
+## [1] &quot;res_oex&quot;
+## 
+## out of 21558 with nonzero total read count
+## adjusted p-value &lt; 0.1
+## LFC &gt; 0 (up)       : 6451, 30%
+## LFC &lt; 0 (down)     : 6549, 30%
+## outliers [1]       : 0, 0%
+## low counts [2]     : 1254, 5.8%
+## (mean count &lt; 1)
+## [1] see &#39;cooksCutoff&#39; argument of ?results
+## [2] see &#39;independentFiltering&#39; argument of ?results
+## 
+## [1] 9429</code></pre>
+<!-- ```{r summaries} -->
+<!-- # print summary  -->
+<!-- summary(res) -->
+<!-- sum((res$padj < 0.05) & ((res$log2FoldChange >= 1) | (res$log2FoldChange <= -1)), na.rm=TRUE) -->
+<!-- ``` -->
+</div>
+<div id="shrinkage-of-lfcs" class="section level4">
+<h4>Shrinkage of LFCs</h4>
+<p><a href="https://bioconductor.org/packages/release/bioc/vignettes/DESeq2/inst/doc/DESeq2.html#interactions">“Shrinkage of effect size (LFC estimates) is useful for visualization and ranking of genes.”</a> Some sort of LFC shrinkage ran automatically in the earlier versions of DESeq2, which has by now been deprecated. It can be called manually, by running its own command, which by default now (as of 04-2020) applies a new type of shrinkage method. For this method to work, we have to run <code>lfcShrink</code>, specifying the dds object and (either the contrast when ashr method is used, or, for the default method) the coefficient for which we want LFCs to be shrunken. The names of the coefficients in a dds can be called by asking for the <code>resultsNames</code> of a given dds.</p>
+<pre class="r"><code># check names of coefficients (required for shrinkage with apeglm)
+
+resultsNames(dds)</code></pre>
+<pre><code>## [1] &quot;Intercept&quot;             &quot;sample_gbpl1.1_vs_wt&quot;  &quot;sample_gbpl3.5_vs_wt&quot;  &quot;sample_GBPL3.ox_vs_wt&quot;</code></pre>
+<p>For dds1 we see, that one of the coefficients we need is missing (“Genotemp_TOL0_vs_TOL20”). (For all other, we don’t run into this problem) This is because only comparisons to the reference level are included by default (which we set to be SEN20). I thought, it might work nevertheless, but turns out, it does not. After checking if Professor Internet has any suggestion on this problem, I found <a href="https://support.bioconductor.org/p/123247/">a solution directly on Bioconductor</a>:</p>
+<p>"The vignette states that:</p>
+<pre><code>Instead, one need only run nbinomWaldTest to re-estimate MLE coefficients – these are necessary for apeglm – and then run lfcShrink specifying the coefficient of interest in `resultsNames(dds)`.
+
+We give some examples below of producing equivalent designs for use with coef. We show how the coefficients change with `model.matrix`, but the user would, for example, either change the levels of `dds$condition` or replace the design using `design(dds)&lt;-`, then run `nbinomWaldTest` followed by `lfcShrink`.&quot;</code></pre>
+<p>In code, this translates to the following steps:</p>
+<ul>
+<li><p>run DESeq</p></li>
+<li><p>shrink LFCs and save the results for comparisons/coefficients that are available</p></li>
+<li><p>relevel the “Genotemp” factor (e.g. make TOL20 the reference level to get the coefficient for TOL0_vs_TOL20: dds1<span class="math inline">\(Genotemp &lt;- relevel(dds1\)</span>Genotemp, ref = “TOL20”)</p></li>
+<li><p>run nbinomWaldTest to re-estimate MLE coefficients: dds1 &lt;- nbinomWaldTest(dds1)</p></li>
+<li><p>resultsNames(dds1) should then contain Genotemp_TOL0_vs_TOL20, therefore you can then</p></li>
+<li><p>shrink LFCs for remaining comparison(s) (in case there were still more coefficients remaining, repeat releveling etc da capo al fine). The important thing is to NOT run DESeq again on the same object, as is would then re-estimate size factors and dispersions using the new reference level. By only running nbinomWaldTest again, this does not happen, but we get the coefficient we want.</p></li>
+</ul>
+<p>Names of the shrunken result objects will be similar to those above and followed by “.apeglm” to indicate shrinkage. However, as the shrinking only affects LFCs (the their SDs), we don’t have to run the shrinkage for every pvalue adjustment method we used, but instead only once for every comparison, aka contrast aka coefficent…</p>
+<pre class="r"><code># starting with results from dds1, where coefficient is already available
+
+res_gbpl1.apeglm &lt;- lfcShrink(dds, 
+                              coef=&quot;sample_gbpl1.1_vs_wt&quot;,
+                              type = &quot;apeglm&quot;)</code></pre>
+<pre><code>## using &#39;apeglm&#39; for LFC shrinkage. If used in published research, please cite:
+##     Zhu, A., Ibrahim, J.G., Love, M.I. (2018) Heavy-tailed prior distributions for
+##     sequence count data: removing the noise and preserving large differences.
+##     Bioinformatics. https://doi.org/10.1093/bioinformatics/bty895</code></pre>
+<pre class="r"><code>res_gbpl3.apeglm &lt;- lfcShrink(dds, 
+                              coef=&quot;sample_gbpl3.5_vs_wt&quot;,
+                              type = &quot;apeglm&quot;)</code></pre>
+<pre><code>## using &#39;apeglm&#39; for LFC shrinkage. If used in published research, please cite:
+##     Zhu, A., Ibrahim, J.G., Love, M.I. (2018) Heavy-tailed prior distributions for
+##     sequence count data: removing the noise and preserving large differences.
+##     Bioinformatics. https://doi.org/10.1093/bioinformatics/bty895</code></pre>
+<pre class="r"><code>res_oex.apeglm &lt;- lfcShrink(dds, 
+                              coef=&quot;sample_GBPL3.ox_vs_wt&quot;,
+                              type = &quot;apeglm&quot;)</code></pre>
+<pre><code>## using &#39;apeglm&#39; for LFC shrinkage. If used in published research, please cite:
+##     Zhu, A., Ibrahim, J.G., Love, M.I. (2018) Heavy-tailed prior distributions for
+##     sequence count data: removing the noise and preserving large differences.
+##     Bioinformatics. https://doi.org/10.1093/bioinformatics/bty895</code></pre>
+<p>OK… now, we should have all results we want for now. I put the shrunken ones in a list, as well; export them as above and then good-night for today.</p>
+<pre class="r"><code>reslist.shrunk &lt;- list(&quot;res_gbpl1.apeglm&quot; = res_gbpl1.apeglm,
+                       &quot;res_gbpl3.apeglm&quot; = res_gbpl3.apeglm,
+                       &quot;res_oex.apeglm&quot; = res_oex.apeglm)</code></pre>
+<pre class="r"><code>for (i in seq_along(reslist)){
+  
+  geneID &lt;- rownames(reslist.shrunk[[i]])
+  
+  reslist.shrunk[[i]]$symbol &lt;- mapIds(org.At.tair.db,     # object to extract data from
+                                keys = geneID,      # geneIDs just extracted from the `res` object see function -1) 
+                                column = &quot;SYMBOL&quot;,  # entrys from that column are extracted 
+                                keytype  =&quot;TAIR&quot;,   # to values from *which column* do the ´keys´ provided above correspond?
+                                multiVals=&quot;first&quot;   # how to handle one-to-many assignments (here: only map first)
+                                )
+
+
+## adding GENENAME (= descriptions) to the geneID-backbone (-keys)
+## aka:repeat above command, but this time extract values from the &quot;GENENAME&quot; column 
+## (and store them in a column of anno.df termed &quot;description&quot;)
+  
+  reslist.shrunk[[i]]$description &lt;- mapIds(org.At.tair.db,   
+                                     keys = geneID,    
+                                     column = &quot;GENENAME&quot;, # entrys from that column are extracted 
+                                     keytype  =&quot;TAIR&quot;,  
+                                     multiVals=&quot;first&quot;)
+  
+}</code></pre>
+<pre><code>## &#39;select()&#39; returned 1:many mapping between keys and columns
+## &#39;select()&#39; returned 1:many mapping between keys and columns
+## &#39;select()&#39; returned 1:many mapping between keys and columns
+## &#39;select()&#39; returned 1:many mapping between keys and columns
+## &#39;select()&#39; returned 1:many mapping between keys and columns
+## &#39;select()&#39; returned 1:many mapping between keys and columns</code></pre>
+<pre class="r"><code>for (i in seq_along(reslist.shrunk)){
+  
+  
+  # order element i by padj
+  resdf.shrunk &lt;- reslist.shrunk[[i]][order(reslist.shrunk[[i]]$padj),]     
+  
+  # convert ordered element to df
+  resdf.shrunk &lt;- as.data.frame(resdf.shrunk)       
+  
+  # store name of list corresponding listelement
+  resname.shrunk &lt;- names(reslist.shrunk[i])                          
+  
+  # write the df to a table under ./output/ use the date and the name of the df as file name.
+ # write.table(resdf.shrunk, file = paste0(&quot;./output/&quot;, Sys.Date(), &quot;_&quot;, resname.shrunk, &quot;.txt&quot;, sep = &quot;&quot;), sep = &quot;\t&quot;)
+  
+}</code></pre>
+</div>
+</div>
+<div id="visualization-of-results" class="section level3">
+<h3>Visualization of results</h3>
+<div id="ma-plots" class="section level5">
+<h5>MA plots</h5>
+<p>“An MA-plot (Dudoit et al. 2002) provides a useful overview for an experiment with a two-group comparison (Figure below).”</p>
+<pre class="r"><code>for (i in seq_along(reslist)){
+
+MA &lt;- DESeq2::plotMA(reslist[[i]], ylim=c(-5,5))
+print(MA)
+
+}</code></pre>
+<p><img src="RNASeq_gbpl3-5_files/figure-html/MAplots-1.png" width="672" /></p>
+<pre><code>## NULL</code></pre>
+<p><img src="RNASeq_gbpl3-5_files/figure-html/MAplots-2.png" width="672" /></p>
+<pre><code>## NULL</code></pre>
+<p><img src="RNASeq_gbpl3-5_files/figure-html/MAplots-3.png" width="672" /></p>
+<pre><code>## NULL</code></pre>
+<pre class="r"><code>for (i in seq_along(reslist.shrunk)){
+
+MA &lt;- DESeq2::plotMA(reslist.shrunk[[i]], ylim=c(-5,5))
+print(MA)
+
+}</code></pre>
+<p><img src="RNASeq_gbpl3-5_files/figure-html/MAplots-4.png" width="672" /></p>
+<pre><code>## NULL</code></pre>
+<p><img src="RNASeq_gbpl3-5_files/figure-html/MAplots-5.png" width="672" /></p>
+<pre><code>## NULL</code></pre>
+<p><img src="RNASeq_gbpl3-5_files/figure-html/MAplots-6.png" width="672" /></p>
+<pre><code>## NULL</code></pre>
+<p>We can label individual points on the MA-plot as well. Here we use the with R function to plot a circle and text for a selected row of the results object. Within the with function, only the baseMean and log2FoldChange values for the selected rows of res are used.</p>
+<pre class="r"><code>topGene.apeglm &lt;- list()
+
+for (i in seq_along(reslist.shrunk)){
+  
+  topGene.apeglm[i] &lt;- rownames(reslist.shrunk[[i]])[which.min(reslist.shrunk[[i]]$padj)]
+  
+  DESeq2::plotMA(reslist.shrunk[[i]], ylim = c(-7,7))
+  with(reslist.shrunk[[i]][topGene.apeglm[[i]], ], {
+    points(baseMean, log2FoldChange, col=&quot;tomato&quot;, cex=2, lwd=2)
+    text(baseMean, log2FoldChange, topGene.apeglm[[i]], pos=2, col=&quot;tomato&quot;)
+    })
+  }</code></pre>
+<p><img src="RNASeq_gbpl3-5_files/figure-html/labeledMAplots-1.png" width="672" /><img src="RNASeq_gbpl3-5_files/figure-html/labeledMAplots-2.png" width="672" /><img src="RNASeq_gbpl3-5_files/figure-html/labeledMAplots-3.png" width="672" /></p>
+</div>
+<div id="histogramms-of-p-values" class="section level4">
+<h4>histogramms of p-values</h4>
+<p>Another useful diagnostic plot is the histogram of the p values (figure below). This plot is best formed by excluding genes with very small counts, which otherwise generate spikes in the histogram.</p>
+<pre class="r"><code>for (i in seq_along(reslist)){
+  
+  hist(reslist[[i]]$pvalue[reslist[[i]]$baseMean &gt; 1], 
+       main = paste(names(reslist[i])), 
+       xlab = paste(names(reslist[i]), &quot;: pvalues of genes with basemean &gt; 1&quot;), 
+       breaks = 0:20/20, col = &quot;grey50&quot;, border = &quot;white&quot;)
+  }</code></pre>
+<p><img src="RNASeq_gbpl3-5_files/figure-html/hist-1.png" width="672" /><img src="RNASeq_gbpl3-5_files/figure-html/hist-2.png" width="672" /><img src="RNASeq_gbpl3-5_files/figure-html/hist-3.png" width="672" /></p>
+</div>
+<div id="plotting-counts-of-most-significant-degenes" class="section level4">
+<h4>Plotting counts of most significant DEgenes</h4>
+<p>For these plots, we do the following …. * pick a results object * extract the name of the gene with the lowest padj - aka the topGene * use the <code>plotCounts</code> function that comes with DESeq + specify the dds object that the results object is derived from, so that the function can grep the counts for the topGene + if you want to use different shapes / colors etc. based on some feature of the sample (genotype or temp or whatever), specify these factors via the <code>intgroup</code> argument</p>
+<p>This again, would require copy+paste-ing till I die, if I do it individually for each topGene (or res object). Therefore, I loop through lists again. This time, however, we need the matching dds object for each res object, cause the dds is where the function greps the counts from. I therefore create a list, <code>ddslist</code> , in which I collect dds1, dds2 and dds3 (all of them named, i.e. <code>"ddsX" = ddsX</code>). Additionally, I create a vector (<code>assigndds</code>) with 16 elements corresponding to the name of the dds’s in the same order as the corresponding res objects occur in <code>reslist</code>. (i.e. 8x “dds1”, 4X “dds2”, 4x “dds3”). This allows us to access the correct dds for each result, i.e. for each iteration through the for loop (i).</p>
+<p># plotCounts(ddslist[[ (assigndds[[i]]) ]], gene = topGene[[i]], intgroup=c(“genotype”, “temp”))</p>
+<pre class="r"><code># create list to store the top genes in 
+
+topGene &lt;- list()
+
+
+# for each res object
+for (i in seq_along(reslist)){
+  
+  # store the topGene (lowest padj) as list element in the topGene-list
+  topGene[i] &lt;- rownames(reslist[[i]])[which.min(reslist[[i]]$padj)] 
+ 
+  # store plot data as object (dataframe)
+  geneCounts &lt;- plotCounts(dds, 
+                           gene = topGene[[i]], 
+                           intgroup = &quot;sample&quot;, 
+                           returnData = TRUE)
+  
+  # modify plot with ggplot and store in object plot 
+  plot &lt;- ggplot(geneCounts, aes(x = sample, y = count)) + 
+    scale_y_log10() +  
+    geom_beeswarm(cex = 3) + 
+    ggtitle(paste(names(reslist[i]), &quot;: &quot;, topGene[[i]]))
+  
+  # Have to explicitly ask to print plot in order to draw plot 
+  print(plot)
+  
+}</code></pre>
+<p><img src="RNASeq_gbpl3-5_files/figure-html/topgene-1.png" width="672" /><img src="RNASeq_gbpl3-5_files/figure-html/topgene-2.png" width="672" /><img src="RNASeq_gbpl3-5_files/figure-html/topgene-3.png" width="672" /></p>
+</div>
+</div>
+<div id="seeing-is-believing-visualizations-and-plots" class="section level3">
+<h3>Seeing is believing: Visualizations and Plots</h3>
+<div id="arbitrary-filters-meaningful-genes-filtering-for-deg-by-padj-and-lfc-and-preps-for-plots" class="section level4">
+<h4>Arbitrary filters, meaningful genes: Filtering for DEG by padj and lfc and preps for plots</h4>
+<p>The following section is adopted mostly from <a href="https://hbctraining.github.io/DGE_workshop/lessons/05_DGE_DESeq2_analysis2.html">Episode5</a> &amp; <a href="https://hbctraining.github.io/DGE_workshop/lessons/06_DGE_visualizing_results.html">Episode6</a> of <a href="https://github.com/hbctraining/DGE_workshop">the Harvard DGE Workshop</a>.</p>
+<p>Like we did in prior analyses, we set an arbitrary cutoff for the padj and the log2Foldchange. I will assign variables to the cutoff values, so that I don’t have to specify the numbers over and over.</p>
+<pre class="r"><code>padj.cutoff &lt;- 0.05
+lfc.cutoff &lt;- 1</code></pre>
+<p><code>DESeqResults</code> can be difficult to work with in downstream analysis and particularly visualization. We therefore convert them to tibbles.</p>
+<pre class="r"><code>all.reslist &lt;- list(&quot;res_gbpl1&quot; = res_gbpl1,
+                    &quot;res_gbpl3&quot; = res_gbpl3,
+                    &quot;res_oex&quot; = res_oex,
+                    &quot;res_gbpl1.apeglm&quot; = res_gbpl1.apeglm,
+                    &quot;res_gbpl3.apeglm&quot; = res_gbpl3.apeglm,
+                    &quot;res_oex.apeglm&quot; = res_oex.apeglm)</code></pre>
+<pre class="r"><code># create list to accommodate results tibbles
+
+reslist_tb &lt;- list()
+
+
+# loop through reslist, convert each element to tibble and order by padj
+
+for (i in seq_along(all.reslist)){
+  
+  reslist_tb[[i]] &lt;- all.reslist[[i]] %&gt;% 
+    data.frame() %&gt;%
+    rownames_to_column(var=&quot;gene&quot;) %&gt;% 
+    as_tibble() %&gt;%
+    arrange(padj)
+  }
+
+names(reslist_tb) &lt;- names(all.reslist)
+
+
+reslist_tb</code></pre>
+<pre><code>## $res_gbpl1
+## # A tibble: 21,558 x 7
+##    gene      baseMean log2FoldChange lfcSE  stat pvalue  padj
+##    &lt;chr&gt;        &lt;dbl&gt;          &lt;dbl&gt; &lt;dbl&gt; &lt;dbl&gt;  &lt;dbl&gt; &lt;dbl&gt;
+##  1 AT1G08140   12112.          -8.24 0.197 -41.8      0     0
+##  2 AT1G34150   11028.           6.25 0.162  38.5      0     0
+##  3 AT2G14288   17173.          -6.84 0.154 -44.3      0     0
+##  4 AT3G27030    9062.           7.54 0.183  41.2      0     0
+##  5 AT3G57270    8403.           7.31 0.186  39.3      0     0
+##  6 AT4G25370   11535.           9.11 0.242  37.6      0     0
+##  7 AT4G36900   35849.           6.85 0.140  48.8      0     0
+##  8 AT4G38480    6290.           6.62 0.173  38.3      0     0
+##  9 AT5G22720   26863.           8.17 0.166  49.2      0     0
+## 10 AT5G35810   13154.           7.78 0.199  39.2      0     0
+## # ... with 21,548 more rows
+## 
+## $res_gbpl3
+## # A tibble: 21,558 x 7
+##    gene      baseMean log2FoldChange lfcSE   stat   pvalue     padj
+##    &lt;chr&gt;        &lt;dbl&gt;          &lt;dbl&gt; &lt;dbl&gt;  &lt;dbl&gt;    &lt;dbl&gt;    &lt;dbl&gt;
+##  1 AT4G10180    238.          -3.51  0.270 -13.0  1.19e-38 2.57e-34
+##  2 AT4G31408  14191.          -1.19  0.153  -7.82 5.34e-15 5.75e-11
+##  3 AT1G53850     43.6         -2.60  0.425  -6.11 9.81e-10 7.05e- 6
+##  4 AT4G21250     70.9          2.97  0.492   6.03 1.60e- 9 8.64e- 6
+##  5 AT1G75200    490.          -1.18  0.210  -5.62 1.86e- 8 8.03e- 5
+##  6 AT1G27100     21.3          8.33  1.52    5.46 4.70e- 8 1.69e- 4
+##  7 AT3G61860   3813.          -0.847 0.161  -5.27 1.40e- 7 4.31e- 4
+##  8 AT3G03010    207.         -11.8   2.30   -5.11 3.20e- 7 8.63e- 4
+##  9 AT2G36230    137.          -1.47  0.295  -4.97 6.64e- 7 1.59e- 3
+## 10 AT5G59430     47.3          2.44  0.516   4.72 2.40e- 6 5.18e- 3
+## # ... with 21,548 more rows
+## 
+## $res_oex
+## # A tibble: 21,558 x 7
+##    gene      baseMean log2FoldChange lfcSE  stat pvalue  padj
+##    &lt;chr&gt;        &lt;dbl&gt;          &lt;dbl&gt; &lt;dbl&gt; &lt;dbl&gt;  &lt;dbl&gt; &lt;dbl&gt;
+##  1 AT1G08140   12112.          -6.91 0.173 -39.9      0     0
+##  2 AT1G34150   11028.           6.20 0.162  38.2      0     0
+##  3 AT2G14288   17173.          -6.03 0.147 -41.1      0     0
+##  4 AT3G13222    3598.          -7.37 0.188 -39.2      0     0
+##  5 AT3G27030    9062.           7.61 0.183  41.6      0     0
+##  6 AT3G57270    8403.           7.20 0.186  38.7      0     0
+##  7 AT4G36900   35849.           6.65 0.140  47.4      0     0
+##  8 AT4G38480    6290.           6.55 0.173  37.9      0     0
+##  9 AT5G22720   26863.           8.07 0.166  48.6      0     0
+## 10 AT5G35810   13154.           7.55 0.199  38.0      0     0
+## # ... with 21,548 more rows
+## 
+## $res_gbpl1.apeglm
+## # A tibble: 21,558 x 6
+##    gene      baseMean log2FoldChange lfcSE pvalue  padj
+##    &lt;chr&gt;        &lt;dbl&gt;          &lt;dbl&gt; &lt;dbl&gt;  &lt;dbl&gt; &lt;dbl&gt;
+##  1 AT1G08140   12112.          -8.23 0.197      0     0
+##  2 AT1G34150   11028.           6.24 0.163      0     0
+##  3 AT2G14288   17173.          -6.83 0.154      0     0
+##  4 AT3G27030    9062.           7.54 0.183      0     0
+##  5 AT3G57270    8403.           7.30 0.186      0     0
+##  6 AT4G25370   11535.           9.10 0.242      0     0
+##  7 AT4G36900   35849.           6.85 0.141      0     0
+##  8 AT4G38480    6290.           6.61 0.173      0     0
+##  9 AT5G22720   26863.           8.16 0.166      0     0
+## 10 AT5G35810   13154.           7.78 0.199      0     0
+## # ... with 21,548 more rows
+## 
+## $res_gbpl3.apeglm
+## # A tibble: 21,558 x 6
+##    gene      baseMean log2FoldChange   lfcSE   pvalue     padj
+##    &lt;chr&gt;        &lt;dbl&gt;          &lt;dbl&gt;   &lt;dbl&gt;    &lt;dbl&gt;    &lt;dbl&gt;
+##  1 AT4G10180    238.    -3.47        0.271   1.19e-38 2.57e-34
+##  2 AT4G31408  14191.    -1.15        0.155   5.34e-15 5.75e-11
+##  3 AT1G53850     43.6   -2.45        0.437   9.81e-10 7.05e- 6
+##  4 AT4G21250     70.9    2.80        0.496   1.60e- 9 8.64e- 6
+##  5 AT1G75200    490.    -1.10        0.218   1.86e- 8 8.03e- 5
+##  6 AT1G27100     21.3    8.26        2.61    4.70e- 8 1.69e- 4
+##  7 AT3G61860   3813.    -0.781       0.168   1.40e- 7 4.31e- 4
+##  8 AT3G03010    207.    -0.000000935 0.00144 3.20e- 7 8.63e- 4
+##  9 AT2G36230    137.    -1.33        0.310   6.64e- 7 1.59e- 3
+## 10 AT5G59430     47.3    2.20        0.534   2.40e- 6 5.18e- 3
+## # ... with 21,548 more rows
+## 
+## $res_oex.apeglm
+## # A tibble: 21,558 x 6
+##    gene      baseMean log2FoldChange lfcSE pvalue  padj
+##    &lt;chr&gt;        &lt;dbl&gt;          &lt;dbl&gt; &lt;dbl&gt;  &lt;dbl&gt; &lt;dbl&gt;
+##  1 AT1G08140   12112.          -6.90 0.174      0     0
+##  2 AT1G34150   11028.           6.19 0.163      0     0
+##  3 AT2G14288   17173.          -6.02 0.147      0     0
+##  4 AT3G13222    3598.          -7.36 0.188      0     0
+##  5 AT3G27030    9062.           7.60 0.183      0     0
+##  6 AT3G57270    8403.           7.20 0.186      0     0
+##  7 AT4G36900   35849.           6.65 0.141      0     0
+##  8 AT4G38480    6290.           6.54 0.173      0     0
+##  9 AT5G22720   26863.           8.06 0.166      0     0
+## 10 AT5G35810   13154.           7.54 0.199      0     0
+## # ... with 21,548 more rows</code></pre>
+<p>Next, we create a list to accommodate the filtered tibbles with significant DEGs only the pre-defined thresholds on padj and lfc:</p>
+<pre class="r"><code>siglist_tb &lt;- lapply(reslist_tb, 
+                     function(x) dplyr::filter(x, padj &lt; padj.cutoff &amp; 
+                                                 abs(log2FoldChange) &gt; lfc.cutoff))</code></pre>
+<p>We’ll also create tibble objects from the <code>sampledat</code> and <code>normcounts</code> data frames before we start plotting. This will enable us to use the tidyverse functionality more easily.</p>
+<pre class="r"><code># Create tibble from sampledat including row names
+
+samples_tb &lt;- sampledat %&gt;% 
+rownames_to_column(var=&quot;ID&quot;) %&gt;% 
+as_tibble()</code></pre>
+<p>We normalized counts for each dds separately, therefore, we collect the normcount tables in a list again and also create a lookup vector, so that we can later assign the correct <code>normcounts</code> to the corresponding <code>res</code>.</p>
+<pre class="r"><code># create tibble containing normalized counts over all samples
+
+normcounts_tb &lt;- normcounts %&gt;% 
+    data.frame() %&gt;% 
+    rownames_to_column(var=&quot;gene&quot;) %&gt;% 
+    as_tibble() </code></pre>
+</div>
+<div id="plot-of-the-tops-plotting-normcounts-of-top20-genes-by-padj" class="section level4">
+<h4>Plot of the tops: Plotting normcounts of top20 genes (by padj)</h4>
+<p><code>siglist_tb</code> already contains the significant genes only, which we arbitrarily defined as those genes, where the padj is less than 0.05 and expression at least doubled under any condition (i.e. the absolute lfc is greater than 1). Importantly, we have already ordered each table from lowest to highest padj. This allows us to easily extract the top 20 genes from each res table.</p>
+<pre class="r"><code># Extract top 20 gene entries from the &#39;gene&#39; column of each ordered table as a character vector
+
+top20_genes_list &lt;- lapply(siglist_tb, function(x) head(dplyr::pull(x, gene), n = 20))
+
+
+# combine all top20s and make vector comprising all unique ones
+
+top20_genes_allunique &lt;- unique(unlist(top20_genes_list))</code></pre>
+<p>Using either the <code>top20_genes_list</code>, or the collapsed vector, <code>top20_genes_allunique</code>, we can extract the corresponding normalized counts for all samples from the normcounts_list, or from the combined normcounttable (<code>normcounts_all</code>). We’ll start with the latter and easier task, where we have one gene list to filter one normcount table only.</p>
+<pre class="r"><code># all normcounts of all unique top20 genes
+
+top20_normcounts &lt;- normcounts_tb %&gt;% filter(gene %in% top20_genes_allunique)
+
+top20_normcounts</code></pre>
+<pre><code>## # A tibble: 29 x 9
+##    gene      wt_rep1 wt_rep2 gbpl.1_rep1 gbpl1.1_rep2 gbpl3.5_rep1 gbpl3.5_rep2 GBPL3.ox_rep1 GBPL3.ox_rep2
+##    &lt;chr&gt;       &lt;dbl&gt;   &lt;dbl&gt;       &lt;dbl&gt;        &lt;dbl&gt;        &lt;dbl&gt;        &lt;dbl&gt;         &lt;dbl&gt;         &lt;dbl&gt;
+##  1 AT1G08140 25764.  26554.       86.9           85.9      24783.       19183.         248.          187.  
+##  2 AT1G10840   196.    141.    12458.         14056.         207.         158.       12845.        12936.  
+##  3 AT1G27100     0       0         0.843          0           83.4         79.7          4.29          1.91
+##  4 AT1G34150   298.    284.    19988.         24373.         239.         289.       21565.        21188.  
+##  5 AT1G53850   114.    138.       19.4           29.4         22.9         19.0          2.15          4.45
+##  6 AT1G75200   249.    228.     1266.          1556.         106.         104.         211.          195.  
+##  7 AT2G10931    37.4    22.6   15292.         17893.          42.3         33.2      16799.        17020.  
+##  8 AT2G14288 32397.  33757.      316.           260.       35941.       33699.         552.          462.  
+##  9 AT2G36230   259.    186.       98.7          131.          74.3         86.4        160.          104.  
+## 10 AT3G03010   985.    337.      298.            34.1          0            0            0             1.91
+## # ... with 19 more rows</code></pre>
+<p>In order to make it a little easier for ggplot2 to handle each table the way we want, we have to <code>gather</code> all counts in a single column, moving the corresponding replicate ID to the same row (i.e. gather data from all columns to obtain a (“normcount.origin”,) “gene”, “replicate”, and a “normcount” column).</p>
+<pre class="r"><code>## all unique top20s in one table
+
+# Gathering the columns to have normalized counts to a single column
+
+gathered_top20_normcounts &lt;- top20_normcounts %&gt;% 
+  # column 1 and 2 carry normcount origins and geneIDs
+  gather(colnames(top20_normcounts)[2:9], key = &quot;ID&quot;, value = &quot;normalized_counts&quot;)
+
+# check gathered table
+head(gathered_top20_normcounts)</code></pre>
+<pre><code>## # A tibble: 6 x 3
+##   gene      ID      normalized_counts
+##   &lt;chr&gt;     &lt;chr&gt;               &lt;dbl&gt;
+## 1 AT1G08140 wt_rep1            25764.
+## 2 AT1G10840 wt_rep1              196.
+## 3 AT1G27100 wt_rep1                0 
+## 4 AT1G34150 wt_rep1              298.
+## 5 AT1G53850 wt_rep1              114.
+## 6 AT1G75200 wt_rep1              249.</code></pre>
+<pre class="r"><code># add (join) samples_tb 
+gathered_top20_normcounts &lt;- inner_join(samples_tb, gathered_top20_normcounts)</code></pre>
+<pre><code>## Joining, by = &quot;ID&quot;</code></pre>
+<p>…. phew… quite a bit of prep. But now we’re ready to plot</p>
+<pre class="r"><code>## plot using ggplot2
+ggplot(gathered_top20_normcounts) +
+        geom_point(aes(x = gene, y = normalized_counts, color = sample)) +
+        scale_y_log10() +
+        xlab(&quot;Genes&quot;) +
+        ylab(&quot;log10 Normalized Counts&quot;) +
+        ggtitle(&quot;Top 20 Significant DE Genes&quot;) +
+        theme_bw() +
+        theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+        theme(plot.title = element_text(hjust = 0.5))</code></pre>
+<pre><code>## Warning: Transformation introduced infinite values in continuous y-axis</code></pre>
+<p><img src="RNASeq_gbpl3-5_files/figure-html/top20normcountplot-1.png" width="672" /></p>
+<p>And here the plots showing the normcounts for the top20 for each res object individually</p>
+<pre class="r"><code>top20ncplot &lt;- ggplot(gathered_top20_normcounts) + 
+  geom_point(aes(x = gene, y = normalized_counts, color = sample)) +
+    scale_y_log10() +
+  xlab(&quot;Genes&quot;) +
+  ylab(&quot;log10 Normalized Counts&quot;) +
+  ggtitle(&quot;Top 20 Significant DE Genes between mutants and WT&quot;) +
+  theme_bw() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+  theme(plot.title = element_text(hjust = 0.5))
+
+plot(top20ncplot)</code></pre>
+<pre><code>## Warning: Transformation introduced infinite values in continuous y-axis</code></pre>
+<p><img src="RNASeq_gbpl3-5_files/figure-html/top20ncindividualplots-1.png" width="672" /></p>
+</div>
+<div id="heatmaps" class="section level4">
+<h4>Heatmaps</h4>
+<p>In addition to plotting subsets, we could also extract the normalized values of all the significant genes and plot a heatmap of their expression using <code>pheatmap()</code>.</p>
+<pre class="r"><code># Extract normalized expression for significant genes (2:12), and set the gene column (1) to row names
+
+siglist_normcounts &lt;- list() 
+
+for (i in seq_along(siglist_tb)){
+  
+  siglist_normcounts[[i]] &lt;- dplyr::filter(normcounts_tb, gene %in% siglist_tb[[i]]$gene) 
+}
+
+names(siglist_normcounts) &lt;- names(siglist_tb)
+
+
+
+# Now let’s draw the heatmap using pheatmap:
+
+### Annotate our heatmap (optional)
+annotation &lt;- samples_tb %&gt;% 
+    dplyr::select(ID, sample) %&gt;% 
+    data.frame(row.names = &quot;ID&quot;)
+
+annotation</code></pre>
+<pre><code>##                 sample
+## wt_rep1             wt
+## wt_rep2             wt
+## gbpl.1_rep1    gbpl1.1
+## gbpl1.1_rep2   gbpl1.1
+## gbpl3.5_rep1   gbpl3.5
+## gbpl3.5_rep2   gbpl3.5
+## GBPL3.ox_rep1 GBPL3.ox
+## GBPL3.ox_rep2 GBPL3.ox</code></pre>
+<pre class="r"><code>### Set a color palette
+heat_colors &lt;- brewer.pal(4, &quot;YlOrRd&quot;)</code></pre>
+<pre class="r"><code>### Run pheatmap through elements of siglist_normcounts
+
+
+for (i in seq_along(siglist_normcounts)){ 
+  
+  sigi &lt;- column_to_rownames(as.data.frame(siglist_normcounts[[i]]), var = &quot;gene&quot;)
+  pheatmap(sigi, 
+           color = heat_colors,
+           cluster_rows = T, 
+           show_rownames = F,
+           annotation = annotation, 
+           border_color = NA, 
+           fontsize = 10, 
+           scale = &quot;row&quot;,
+           fontsize_row = 10, 
+           height = 20, 
+           main = paste(names(siglist_normcounts[i])))
+}</code></pre>
+<p><img src="RNASeq_gbpl3-5_files/figure-html/siggenesheatmaps02-1.png" width="672" /><img src="RNASeq_gbpl3-5_files/figure-html/siggenesheatmaps02-2.png" width="672" /><img src="RNASeq_gbpl3-5_files/figure-html/siggenesheatmaps02-3.png" width="672" /><img src="RNASeq_gbpl3-5_files/figure-html/siggenesheatmaps02-4.png" width="672" /><img src="RNASeq_gbpl3-5_files/figure-html/siggenesheatmaps02-5.png" width="672" /><img src="RNASeq_gbpl3-5_files/figure-html/siggenesheatmaps02-6.png" width="672" /></p>
+</div>
+<div id="volcano-plots" class="section level4">
+<h4>Volcano plots</h4>
+<p>Volcano plots show the -log10(padj) against the lfc for all genes. To distinguish significant DEGs from the rest, we add a column to each table in reslist_tb, where we label the sig. DEGs</p>
+<pre class="r"><code>## Obtain logical vector where TRUE values denote padj values &lt; 0.05 and fold change &gt; 1.5 in either direction
+
+reslist_tb &lt;- lapply(reslist_tb, function(x) mutate(x, 
+                                                    DEGthreshold = padj &lt; 0.05 &amp;
+                                                    abs(log2FoldChange) &gt; 1))
+
+
+for (i in seq_along(reslist_tb)){
+  
+  geneID &lt;- reslist_tb[[i]]$gene
+  
+  reslist_tb[[i]]$symbol &lt;- mapIds(org.At.tair.db,     # object to extract data from
+                                   keys = geneID,      # geneIDs just extracted from `reslist_tb`-object see function -1) 
+                                   column = &quot;SYMBOL&quot;,  # entrys from that column are extracted
+                                   keytype  =&quot;TAIR&quot;,   # to values from *which column* do the ´keys´ provided above correspond?
+                                   multiVals=&quot;first&quot;   # how to handle one-to-many assignments (here: only map first)
+                                )
+
+
+## adding GENENAME (= descriptions) to the geneID-backbone (-keys)
+## aka:repeat above command, but this time extract values from the &quot;GENENAME&quot; column 
+## (and store them in a column of anno.df termed &quot;description&quot;)
+  
+  reslist_tb[[i]]$description &lt;- mapIds(org.At.tair.db,   
+                                        keys = geneID,  
+                                        column = &quot;GENENAME&quot;, # entrys from that column are extracted 
+                                        keytype  =&quot;TAIR&quot;,  
+                                        multiVals=&quot;first&quot;)
+  
+}</code></pre>
+<pre><code>## &#39;select()&#39; returned 1:many mapping between keys and columns
+## &#39;select()&#39; returned 1:many mapping between keys and columns
+## &#39;select()&#39; returned 1:many mapping between keys and columns
+## &#39;select()&#39; returned 1:many mapping between keys and columns
+## &#39;select()&#39; returned 1:many mapping between keys and columns
+## &#39;select()&#39; returned 1:many mapping between keys and columns
+## &#39;select()&#39; returned 1:many mapping between keys and columns
+## &#39;select()&#39; returned 1:many mapping between keys and columns
+## &#39;select()&#39; returned 1:many mapping between keys and columns
+## &#39;select()&#39; returned 1:many mapping between keys and columns
+## &#39;select()&#39; returned 1:many mapping between keys and columns
+## &#39;select()&#39; returned 1:many mapping between keys and columns</code></pre>
+<pre class="r"><code>## Genes are already ordered by padj! Create a column to indicate which genes to label (will be filled when looping through list)
+
+reslist_tb &lt;- lapply(reslist_tb, function(x) mutate(x, genelabels = &quot;&quot;)) 
+                  
+                  
+## Volcano plots including labels for the top10 
+
+
+for (i in seq_along(reslist_tb)){
+  
+  
+  reslist_tb[[i]]$genelabels[1:10] &lt;- reslist_tb[[i]]$symbol[1:10]
+  
+  labeledvolcano &lt;- ggplot(reslist_tb[[i]], aes(x = log2FoldChange, y = -log10(padj))) +
+    geom_point(aes(colour = DEGthreshold)) +
+    geom_text_repel(aes(label = reslist_tb[[i]]$genelabels)) +
+    ggtitle(paste(names(reslist_tb[i]))) +
+    xlab(&quot;log2 fold change&quot;) + 
+    ylab(&quot;-log10 adjusted p-value&quot;) +
+    coord_cartesian() + 
+    theme(legend.position = &quot;none&quot;,
+          plot.title = element_text(size = rel(1.5), hjust = 0.5),
+          axis.title = element_text(size = rel(1.25)))
+  
+  plot(labeledvolcano)
+  
+  }</code></pre>
+<pre><code>## Warning: Removed 1254 rows containing missing values (geom_point).</code></pre>
+<pre><code>## Warning: Removed 1258 rows containing missing values (geom_text_repel).</code></pre>
+<p><img src="RNASeq_gbpl3-5_files/figure-html/volcanos-1.png" width="672" /></p>
+<pre><code>## Warning: Removed 5 rows containing missing values (geom_text_repel).</code></pre>
+<p><img src="RNASeq_gbpl3-5_files/figure-html/volcanos-2.png" width="672" /></p>
+<pre><code>## Warning: Removed 1254 rows containing missing values (geom_point).
+
+## Warning: Removed 1258 rows containing missing values (geom_text_repel).</code></pre>
+<p><img src="RNASeq_gbpl3-5_files/figure-html/volcanos-3.png" width="672" /></p>
+<pre><code>## Warning: Removed 1254 rows containing missing values (geom_point).
+
+## Warning: Removed 1258 rows containing missing values (geom_text_repel).</code></pre>
+<p><img src="RNASeq_gbpl3-5_files/figure-html/volcanos-4.png" width="672" /></p>
+<pre><code>## Warning: Removed 5 rows containing missing values (geom_text_repel).</code></pre>
+<p><img src="RNASeq_gbpl3-5_files/figure-html/volcanos-5.png" width="672" /></p>
+<pre><code>## Warning: Removed 1254 rows containing missing values (geom_point).
+
+## Warning: Removed 1258 rows containing missing values (geom_text_repel).</code></pre>
+<p><img src="RNASeq_gbpl3-5_files/figure-html/volcanos-6.png" width="672" /></p>
+<pre class="r"><code>sessionInfo()</code></pre>
+<pre><code>## R version 4.1.0 (2021-05-18)
+## Platform: x86_64-w64-mingw32/x64 (64-bit)
+## Running under: Windows 10 x64 (build 19043)
+## 
+## Matrix products: default
+## 
+## locale:
+## [1] LC_COLLATE=German_Germany.1252  LC_CTYPE=German_Germany.1252    LC_MONETARY=German_Germany.1252
+## [4] LC_NUMERIC=C                    LC_TIME=German_Germany.1252    
+## 
+## attached base packages:
+## [1] parallel  stats4    stats     graphics  grDevices utils     datasets  methods   base     
+## 
+## other attached packages:
+##  [1] org.At.tair.db_3.13.0                     TxDb.Athaliana.BioMart.plantsmart28_3.2.2
+##  [3] GenomicFeatures_1.44.0                    AnnotationDbi_1.54.1                     
+##  [5] UpSetR_1.4.0                              eulerr_6.1.0                             
+##  [7] data.table_1.14.0                         ggrepel_0.9.1                            
+##  [9] RUVSeq_1.26.0                             edgeR_3.34.0                             
+## [11] limma_3.48.1                              EDASeq_2.26.1                            
+## [13] ShortRead_1.50.0                          GenomicAlignments_1.28.0                 
+## [15] Rsamtools_2.8.0                           Biostrings_2.60.1                        
+## [17] XVector_0.32.0                            BiocParallel_1.26.1                      
+## [19] magrittr_2.0.1                            gdata_2.18.0                             
+## [21] IHW_1.20.0                                genefilter_1.74.0                        
+## [23] apeglm_1.14.0                             ggbeeswarm_0.6.0                         
+## [25] glmpca_0.2.0                              PoiClaClu_1.0.2.1                        
+## [27] RColorBrewer_1.1-2                        pheatmap_1.0.12                          
+## [29] vsn_3.60.0                                forcats_0.5.1                            
+## [31] stringr_1.4.0                             dplyr_1.0.7                              
+## [33] purrr_0.3.4                               readr_1.4.0                              
+## [35] tidyr_1.1.3                               tibble_3.1.2                             
+## [37] ggplot2_3.3.5                             tidyverse_1.3.1                          
+## [39] DESeq2_1.32.0                             SummarizedExperiment_1.22.0              
+## [41] Biobase_2.52.0                            MatrixGenerics_1.4.0                     
+## [43] matrixStats_0.59.0                        GenomicRanges_1.44.0                     
+## [45] GenomeInfoDb_1.28.1                       IRanges_2.26.0                           
+## [47] S4Vectors_0.30.0                          BiocGenerics_0.38.0                      
+## 
+## loaded via a namespace (and not attached):
+##   [1] pacman_0.5.1           utf8_1.2.1             R.utils_2.10.1         tidyselect_1.1.1       RSQLite_2.2.7         
+##   [6] grid_4.1.0             munsell_0.5.0          codetools_0.2-18       preprocessCore_1.54.0  withr_2.4.2           
+##  [11] colorspace_2.0-2       filelock_1.0.2         highr_0.9              knitr_1.33             rstudioapi_0.13       
+##  [16] labeling_0.4.2         slam_0.1-48            bbmle_1.0.23.1         GenomeInfoDbData_1.2.6 lpsymphony_1.20.0     
+##  [21] polyclip_1.10-0        hwriter_1.3.2          farver_2.1.0           bit64_4.0.5            coda_0.19-4           
+##  [26] vctrs_0.3.8            generics_0.1.0         xfun_0.24              BiocFileCache_2.0.0    markdown_1.1          
+##  [31] R6_2.5.0               doParallel_1.0.16      clue_0.3-59            locfit_1.5-9.4         bitops_1.0-7          
+##  [36] cachem_1.0.5           DelayedArray_0.18.0    assertthat_0.2.1       BiocIO_1.2.0           scales_1.1.1          
+##  [41] beeswarm_0.4.0         gtable_0.3.0           Cairo_1.5-12.2         affy_1.70.0            rlang_0.4.11          
+##  [46] GlobalOptions_0.1.2    splines_4.1.0          rtracklayer_1.52.0     broom_0.7.8            BiocManager_1.30.16   
+##  [51] yaml_2.2.1             modelr_0.1.8           backports_1.2.1        tools_4.1.0            affyio_1.62.0         
+##  [56] ellipsis_0.3.2         jquerylib_0.1.4        Rcpp_1.0.6             plyr_1.8.6             progress_1.2.2        
+##  [61] zlibbioc_1.38.0        RCurl_1.98-1.3         prettyunits_1.1.1      GetoptLong_1.0.5       haven_2.4.1           
+##  [66] cluster_2.1.2          fs_1.5.0               circlize_0.4.13        reprex_2.0.0           mvtnorm_1.1-2         
+##  [71] aroma.light_3.22.0     hms_1.1.0              evaluate_0.14          xtable_1.8-4           XML_3.99-0.6          
+##  [76] emdbook_1.3.12         jpeg_0.1-8.1           readxl_1.3.1           gridExtra_2.3          shape_1.4.6           
+##  [81] compiler_4.1.0         biomaRt_2.48.2         bdsmatrix_1.3-4        crayon_1.4.1           R.oo_1.24.0           
+##  [86] htmltools_0.5.1.1      geneplotter_1.70.0     lubridate_1.7.10       DBI_1.1.1              dbplyr_2.1.1          
+##  [91] ComplexHeatmap_2.8.0   MASS_7.3-54            rappdirs_0.3.3         Matrix_1.3-4           cli_3.0.0             
+##  [96] R.methodsS3_1.8.1      pkgconfig_2.0.3        numDeriv_2016.8-1.1    xml2_1.3.2             foreach_1.5.1         
+## [101] annotate_1.70.0        bslib_0.2.5.1          vipor_0.4.5            rvest_1.0.0            digest_0.6.27         
+## [106] polylabelr_0.2.0       rmarkdown_2.9          cellranger_1.1.0       restfulr_0.0.13        curl_4.3.2            
+## [111] gtools_3.9.2           rjson_0.2.20           lifecycle_1.0.0        jsonlite_1.7.2         fansi_0.5.0           
+## [116] pillar_1.6.1           lattice_0.20-44        KEGGREST_1.32.0        fastmap_1.1.0          httr_1.4.2            
+## [121] survival_3.2-11        glue_1.4.2             fdrtool_1.2.16         png_0.1-7              iterators_1.0.13      
+## [126] bit_4.0.4              sass_0.4.0             stringi_1.6.2          blob_1.2.1             latticeExtra_0.6-29   
+## [131] memoise_2.0.0</code></pre>
+</div>
+</div>
+<div id="the-usual-clean-up" class="section level2">
+<h2>The usual clean-up</h2>
+<pre class="r"><code># Clear environment
+rm(list = ls()) 
+
+# Clear packages
+pacman::p_unload(all)  # Remove all add-ons</code></pre>
+<pre><code>## The following packages have been unloaded:
+## org.At.tair.db, TxDb.Athaliana.BioMart.plantsmart28, GenomicFeatures, AnnotationDbi, UpSetR, eulerr, data.table, ggrepel, RUVSeq, edgeR, limma, EDASeq, ShortRead, GenomicAlignments, Rsamtools, Biostrings, XVector, BiocParallel, magrittr, gdata, IHW, genefilter, apeglm, ggbeeswarm, glmpca, PoiClaClu, RColorBrewer, pheatmap, vsn, forcats, stringr, dplyr, purrr, readr, tidyr, tibble, ggplot2, tidyverse, DESeq2, SummarizedExperiment, Biobase, MatrixGenerics, matrixStats, GenomicRanges, GenomeInfoDb, IRanges, S4Vectors, BiocGenerics</code></pre>
+<pre class="r"><code># Clear console
+cat(&quot;\014&quot;)  # ctrl+L</code></pre>
+<div style="page-break-after: always;"></div>
+<pre class="r"><code># Clear mind :)
+
+## finalized: 2020-10-12</code></pre>
+</div>
 </div>
 
 
