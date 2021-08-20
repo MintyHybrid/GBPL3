@@ -1,12 +1,6 @@
 ---
 title: "RNASeq_gbpl3-5"
 ---
----
-title: "gbpl3-5 RNASeq Huang et al 2021"
-author: "the-hybrid"
-date: "27 7 2021"
-output: html_document
----
 
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE)
@@ -102,7 +96,7 @@ All of these components can be build from the sample- and countdata objects. It'
 
 Gene info should be accessible from the TxDb package. Let's see what the Arabidopsis TxDb Package contains...
 
-```{r installtxdbAt}
+```{r installtxdbAt1}
 
 ### Leave commented if it's already installed!
 
@@ -114,14 +108,14 @@ Gene info should be accessible from the TxDb package. Let's see what the Arabido
 ```
 
 
-```{r txdbAtlib}
+```{r txdbAtlib1}
 
 library(TxDb.Athaliana.BioMart.plantsmart28)
 
 ```
 
 
-```{r txdbAtlib}
+```{r txdbAtlib2}
 
 ls("package:TxDb.Athaliana.BioMart.plantsmart28") 
 
@@ -197,14 +191,14 @@ head(countmat)
 
 the OrgDb package will be used to annotate the genes, later on! But the handling is sort of similar (or: it can be) to that of a txdb:
 
-```{r orgAtlib}
+```{r orgAtlib2}
 
 library(org.At.tair.db)
 
 ```
 
 
-```{r torgAtlib}
+```{r orgAtlib3}
 
 ls("package:org.At.tair.db") 
 
@@ -475,7 +469,7 @@ In order to process all result objects in one go, I put all of the (deseq)res ob
 The results carrying an "ihw.fwer" or "ihw.bh" suffix are treated slightly different, as they belong to another class (ihwResult vs. DESeqResults). 
 
 
-```{r resexports}
+```{r resexports1}
 
 resdf <- res[order(res$padj),]       # order element res by padj
  
@@ -496,7 +490,7 @@ resdf <- res[order(res$padj),]       # order element res by padj
 
 Gene info should be accessible from the TxDb package. Let's see what the Arabidopsis TxDb Package contains...
 
-```{r installtxdbAt}
+```{r installtxdbAt2}
 
 ### Leave commented if it's already installed!
 
@@ -508,14 +502,14 @@ Gene info should be accessible from the TxDb package. Let's see what the Arabido
 ```
 
 
-```{r txdbAtlib}
+```{r txdbAtlib3}
 
 library(TxDb.Athaliana.BioMart.plantsmart28)
 
 ```
 
 
-```{r txdbAtlib}
+```{r txdbAtlib4}
 
 ls("package:TxDb.Athaliana.BioMart.plantsmart28") 
 
@@ -538,7 +532,7 @@ class(txdb)
 
 ##### OrgDb
 
-```{r orgAtlib}
+```{r orgAtlib1}
 
 library(org.At.tair.db)
 
@@ -638,7 +632,7 @@ for (i in seq_along(reslist)){
 
 
 
-```{r resexports}
+```{r resexports2}
 
 
 for (i in seq_along(reslist)){                 # START OF LOOP
@@ -1263,366 +1257,6 @@ for (i in seq_along(reslist_tb)){
 ```
 
 
-#### Venn diagramms to check overlap of DEGs between res-Sets
-
-
-To examine to what extent the sets of DEGs (defined by our padj and lfc cutoffs) obtained by applying different methods for padjustment etc overlap, I want to create Venn diagrams and upset plots. We already have a list of tables limited to the DEGs (`siglist_tb`). The `ComplexHeatmap` package comes with a `list_to_matrix` function which should make it easy to create a binary matrix, which is needed to create the diagramm. For this, we first need to pull out the gene column only. 
-
-```{r degsetsbinarymat}
-
-degsets <- lapply(siglist_tb, function(x) dplyr::pull(x, gene))
-
-
-degmat <- ComplexHeatmap::list_to_matrix(degsets)
-
-```
-
-Now, for the venn (or euler) diagramm, I first tried the `venneuler` package, but got stuck on the required rJava package, which requires Java being installed on the system. An alternative is `eulerr`. So, I try this one. Plotting all results in one diagramm is not really feasible, however. Instead, I will first focus on the results we obtained from dds1, where we have two different comparisons (SEN0_vs_SEN20 and TOL0_vs_TOL20), where we wanted to check the overlap anyways. I first look at the overlap between these sets and compare their overlap separately for each padj method we used. 
-
-```{r pairwiseeulersentol}
-
-# first, create the euler object
-
-res1bonf.05euler <- euler(degmat[, 1:2])
-
-
-# plot euler diagramm 
-
-plot(res1bonf.05euler, quantities = TRUE)
-
-
-
-
-# repeat for other SEN0_vs_SEN20 vs TOL0_vs_TOL20 objects 
-
-res1holm.05euler <- euler(degmat[, 3:4])
-res1bh.05euler <- euler(degmat[, 5:6])
-res1ihw.bh.05euler <- euler(degmat[, 7:8])
-res1ihw.fwer.05euler <- euler(degmat[, 9:10])
-
-
-plot(res1holm.05euler, quantities = TRUE)
-plot(res1bh.05euler, quantities = TRUE)
-plot(res1ihw.bh.05euler, quantities = TRUE)
-plot(res1ihw.fwer.05euler, quantities = TRUE)
-
-
-```
-
-We can also check the overlap between SEN0_vs_SEN20 sets using different padj methods (and do the same for TOL0_vs_TOL20 results)
-
-```{r padjwisegenoeuler}
-
-# first, create the euler objects 
-
-res1TOL0vsTOL20euler <- euler(degmat[, c(2,4,6,8,10)])
-res1SEN0vsSEN20euler <- euler(degmat[, c(1,3,5,7,9)])
-
-
-plot(res1TOL0vsTOL20euler, quantities = TRUE)
-plot(res1SEN0vsSEN20euler, quantities = TRUE)
-
-
-```
-
-Let's check if this looks similar for the DEG sets obtained from dds2 or dds3 by using different methods for p-adjustment.
-
-
-```{r dds2dds3eulers}
-
-
-res2euler <- euler(degmat[ , 11:15])
-res3euler <- euler(degmat[ , 16:20])
-
-
-plot(res2euler, quantities = TRUE)
-plot(res3euler, quantities = TRUE)
-
-
-```
-
-Now, let's combine all sets where the same padjustment was performed
-
-
-```{r eulerallsetspadjwise}
-
-
-
-# all sets with Bonferroni-adjustment of pvalues
-
-resbonf.05euler <- euler(degmat[ , c(1,2,11,16)])
-plot(resbonf.05euler, quantities = TRUE)
-
-
-
-# all sets with Holm-adjustment of pvalues
-
-resholm.05euler <- euler(degmat[ , c(3,4,12,17)])
-plot(resholm.05euler, quantities = TRUE)
-
-
-
-# all sets with Benjamini&Hochberg-adjustment of pvalues
-
-resbh.05euler <- euler(degmat[ , c(5,6,13,18)])
-plot(resbh.05euler, quantities = TRUE)
-
-
-
-# all sets with Independent Hypothesis Weighting (Benjamini&Hochberg correction)
-
-resihw.bh.05euler <- euler(degmat[ , c(7,8,14,19)])
-plot(resihw.bh.05euler, quantities = TRUE)
-
-
-
-# all sets with Independent Hypothesis Weighting (FWER correction)
-
-resihw.fwer.05euler <- euler(degmat[, c(9,10,15,20)])
-plot(resihw.fwer.05euler, quantities = TRUE)
-
-
-```
-
-#### don't be upset, but UpSet Plots !
-
-UpSet was published by [Lex et al., 2014](https://www.ncbi.nlm.nih.gov/pmc/articles/PMC4720993/) as "a novel visualization technique for the quantitative analysis of sets, their intersections, and aggregates of intersections". Generally, it can convey the same information as a Venn diagram - plus a lot more!   
-
-
-Here are some descriptions for the (mostly optional) arguments used in the `upset()` function, taken from [the vignette](https://cran.r-project.org/web/packages/UpSetR/vignettes/basic.usage.html): 
-
-"When not specifying specific sets, `nsets` selects the n largest sets from the data. `number.angles` determines the angle (in degrees) of the numbers above the intersection size bars. `point.size` changes the size of the circles in the matrix. `line.size` changes the size of the lines connecting the circles in the matrix. `mainbar.y.label` and `sets.x.label` can be used to change the axis labels on the intersection size bar plot and set size bar plot, respectively. Recently added, `text.scale` allows scaling of all axis titles, tick labels, and numbers above the intersection size bars. `text.scale` can either take a universal scale in the form of an integer, or a vector of specific scales in the format: `c(intersection size title, intersection size tick labels, set size title, set size tick labels, set names, numbers above bars)`.  
-"To look at specific sets, a vector of set names can be entered into the sets parameter. To change the proportions of the plot heights assigned to the matrix and intersection size bar plot, use the `mb.ratio` parameter entered as percentages. If no order is specified, the matrix will be ordered by degree, then frequency."
-
-```{r upset}
-
-upset(fromList(degsets), 
-      sets = c("res1bonf.05SEN0SEN20", "res1bonf.05TOL0TOL20", "res1holm.05SEN0SEN20", "res1holm.05TOL0TOL20",
-               "res1bh.05SEN0SEN20", "res1bh.05TOL0TOL20", "res1ihw.bh.05SEN0SEN20", "res1ihw.bh.05TOL0TOL20",
-               "res1ihw.fwer.05SEN0SEN20", "res1ihw.fwer.05TOL0TOL20", "res2bonf.05", "res2holm.05",
-               "res2bh.05", "res2ihw.bh.05", "res2ihw.fwer.05", "res3bonf.05", "res3holm.05", "res3bh.05",
-               "res3ihw.bh.05", "res3ihw.fwer.05"), 
-      nsets= 20, 
-      order.by = "freq", 
-      sets.x.label = "DEGs per Set", 
-      text.scale = c(1, 1, 1, 1, 1, 1), 
-      mb.ratio = c(0.55, 0.45), 
-      keep.order = TRUE,
-      group.by = "sets")
-
-
-```
-
-We see, that the majority of genes that occur as DEG in any of our sets, are in fact detected as DEG in all of our sets (1828 genes). Another large set (389) of DEGs is common to all res2 and res3 sets, as well as all the SEN0vsSEN20 sets and two TOL0vsTOL20 sets (res1ihw.bh.05TOL0TOL20 & res1bh.05TOL0TOL20), but not in any of the remaining three sets (res1ihw.fwer.05TOL0TOL20, res1holm.05TOL0TOL20, res1bonf.05TOL0TOL20) derived of dds1 and so on and so on. But which genes are now "right or wrong" or which genes make the "core cold response"?   
-To answer this question, we can manually extract, for example, the total set of unique DEGs (union of all sets), or intersect-sets with e.g. `Reduce(intersect, list(degset1, degset2....))`. We'll start with the union of all genes, which are detected as DEG (i.e. somewhere, i.e. in at least one set = `degunion`, not shown in the plot). Then, we'll reproduce the intersecting sets in the order they occur in the UpSet plot above, i.e. the intersect of all sets first (1838 genes = `degintersect`), then the intersect of all except three of the TOL sets (389 genes = `degsubset1`), then the intersect of all except all TOL sets and excluding genes occuring in any of the TOL sets (165 genes, `degsubset2`) and so on... for all subsets with >= 10 genes. The remaining genes will be combined in an own subset `degsubsetmisc`.
-
-```{r intersectDEGsets}
-
-# the total set (union), of all unique DEGs 
-
-degunion <- unique(unlist(degsets))
-
-
-# intersect of all sets, i.e. genes detected as DEGs in all of the sets (doesn't work with `reduce` in lowercase!)
-
-degintersect <- Reduce(intersect, degsets)
-
-
-
-# intersect of all except res1ihw.fwer.05TOL0TOL20, res1holm.05TOL0TOL20, res1bonf.05TOL0TOL20 and excluding genes occuring in any of the latter three sets
-
-degsubset1 <- setdiff(Reduce(intersect, degsets[-c(2, 4, 10)]), unique(unlist(degsets[c(2,4,10)])))
-
-
-
-# intersect of all sets except the five TOL0TOL20 sets and excluding genes occuring in any TOL0TOL20 sets
-
-degsubset2 <- setdiff(Reduce(intersect, degsets[-c(2,4,6,8,10)]), unique(unlist(degsets[c(2,4,6,8,10)])))
-
-
-
-# intersect of all SEN0SEN20 sets, but not anywhere else
-
-degsubset3 <- setdiff(Reduce(intersect, degsets[c(1,3,5,7,9)]), unique(unlist(degsets[-c(1,3,5,7,9)])))
-
-
-
-# next : degsubset4
-
-degsubset4 <- setdiff(Reduce(intersect, degsets[c(1,3,5,7,9,13,14,18,19)]), unique(unlist(degsets[-c(1,3,5,7,9,13,14,18,19)])))
-
-
-# next : degsubset5
-
-degsubset5 <- setdiff(Reduce(intersect, degsets[-c(2,4,10,11,12,15)]), unique(unlist(degsets[c(2,4,10,11,12,15)])))
-
-
-# next : degsubset6
-
-degsubset6 <- setdiff(Reduce(intersect, degsets[-c(2,4,6,8,10,11,12,15)]), unique(unlist(degsets[c(2,4,6,8,10,11,12,15)])))
-
-
-# next : degsubset7
-
-degsubset7 <- setdiff(Reduce(intersect, degsets[-10]), unique(unlist(degsets[10])))
-
-
-
-# next : degsubset8
-
-degsubset8 <- setdiff(Reduce(intersect, degsets[-c(2,4,9,10)]), unique(unlist(degsets[c(2,4,9,10)])))
-
-
-# next : degsubset9
-
-degsubset9 <- setdiff(Reduce(intersect, degsets[c(1,3,5,7,9,18,19)]), unique(unlist(degsets[-c(1,3,5,7,9,18,19)])))
-
-
-# next : degsubset10
-
-degsubset10 <- setdiff(Reduce(intersect, degsets[-9]), unique(unlist(degsets[9])))
-
-
-
-# remaining subsets combined in `degsubsetmisc` 
-
-degsubsetmisc <- setdiff(degunion, unique(c(degintersect, degsubset1, degsubset2, degsubset3, degsubset4, degsubset5, degsubset6, degsubset7, degsubset8, degsubset9, degsubset10)))
-
-
-
-```
-
-We now have our DEGs. With that, I am finished with the DE analysis for now. Next up, we'll inspect the DEG sets further to evaluate which of the different strategies we followed gave us "the best" results. If you want to continue directly, I recommend to either save your global R environment as it is right now (as an .RData file) or just continue! This will grant us (or the script we use next) access to all the objects in your environment. From here, the analysis continues in a new Project called Paper1_functionalannot.
-
-```{r saveenvironment}
-
-save.image("E:/R projects/DESeq2_Paper1/output/2020-10-12_DeSeq2_nondedup_coldresponse.RData")
-
-```
-  
-    
-    
-
-## Analyses and Results for dds4
-
-The following chunk of code performs a likelihood ratio test, where we remove the genotype-specific differences for the temp response. **Genes with small p values from this test are those which at one or more time points / cold treatments after time 0 (control condition, i.e. 20°C) showed a genotype-specific effect. Note therefore that this will not give small p values to genes that moved up or down over time in the same way in both strains.**
-
-
-```{r res4}
-
-res4 <- DESeq2::results(dds4, alpha = 0.05, pAdjustMethod = "bonferroni")
-
-res4$symbol <- mcols(dds4)$symbol
-
-head(res4[order(res4$padj),], 4)
-
-```
-
-vignette: "This is just one of the tests that can be applied to time series data (not really what we have, but we act as if time point 0 is equivalent of our "20°C" and later time points correspond to cooler temperature.). Another option would be to model the counts as a smooth function of time (temp), and to include an interaction term of the condition with the smooth function. It is possible to build such a model using spline basis functions within R, and another, more modern approach is using Gaussian processes (Tonner et al. 2017)."
-
-"We can plot the counts for the groups over time (temperatures) using ggplot2, for the gene with the smallest adjusted p value, testing for condition-dependent time (temp) profile and accounting for differences at time 0 (at 20°C) (figure below). Keep in mind that the interaction terms are the *difference* between the two groups at a given time after accounting for the difference at time 0 (control temperature)."
-
-
-```{r res4tempcourseplot}
-
-plot4 <- plotCounts(dds4, which.min(res4$padj), 
-                   intgroup = c("temp","genotype"), returnData = TRUE)
-
-plot4$temp <- as.numeric(as.character(gsub("C", "", plot4$temp)))
-
-plot4$temp
-
-ggplot(plot4,
-  aes(x = temp, y = count, color = genotype, group = genotype)) + 
-  geom_point() + stat_summary(fun.y=mean, geom="line") +
-  scale_y_log10()
-
-
-```
-
-
-  
-  
-Wald tests for the log2 fold changes at individual time points (in our case at different individual temperatures) can be investigated using the test argument to results:
-
-```{r res4names}
-
-resultsNames(dds4)
-
-```
-```{r res4wald}
-
-res4wald <- DESeq2::results(dds4, name="temp_C0_vs_C20", test="Wald")
-
-head(res4wald[order(res4wald$padj),])
-
-
-res4wald.05bonf <- DESeq2::results(dds4, 
-                                   name="temp_C0_vs_C20", 
-                                   test="Wald", 
-                                   alpha = 0.05, 
-                                   pAdjustMethod = "bonferroni")
-
-head(res4wald.05bonf[order(res4wald.05bonf$padj),])
-
-```
-
-
-
-```{r res4waldexport}
-
-
-resdf4wald <- res4wald[order(res4wald$padj),]      # order by padj
-resdf4wald <- as.data.frame(resdf4wald)            # convert to df
-    
-    
-  # write the df to a table under ./output/ use the date and the name of the df as file name.
-  
-    write.table(resdf4wald, file = paste0("./output/", Sys.Date(), "_res4waldtestC0C20.txt", sep = ""), sep = "\t")
-    
-    
-    
-resdf4wald.05bonf <- res4wald.05bonf[order(res4wald.05bonf$padj),]      # order by padj
-resdf4wald.05bonf <- as.data.frame(resdf4wald.05bonf)            # convert to df
-    
-    
-  # write the df to a table under ./output/ use the date and the name of the df as file name.
-  
-    write.table(resdf4wald.05bonf, file = paste0("./output/", Sys.Date(), "_res4waldtestC0C20.05bonf.txt", sep = ""), sep = "\t")
-
-```
-
-
-"We can furthermore cluster significant genes by their profiles. We extract a matrix of the log2 fold changes using the coef function. Note that these are the maximum likelihood estimates (MLE). For shrunken LFC, one must obtain them one coefficient at a time using lfcShrink."
-
-
-```{r dds4coefs}
-
-betas <- coef(dds4)
-colnames(betas)
-
-```
-
-We can now plot the log2 fold changes in a heatmap (figure below).
-  
-```{r}
-
-topGenes <- head(order(res4wald.05bonf$padj),20)
-mat <- betas[topGenes, -c(1,4)]
-
-thr <- 3 
-
-mat[mat < -thr] <- -thr
-
-mat[mat > thr] <- thr
-
-pheatmap(mat, breaks=seq(from=-thr, to=thr, length=101),
-         cluster_col=FALSE)
-
-```
-  
-
- 
 ```{r session}
 
 sessionInfo()
